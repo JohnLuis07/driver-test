@@ -13,6 +13,7 @@ Alpha 02 addresses an internal push-descriptor buffer overflow identified in the
 Alpha 01 compiled in Codespaces and passed static Android ABI and Peanuts ZIP import checks. Device execution is pending. Download the driver ZIP, matching source archive, notices, build manifest and checksums from the [Alpha 01 GitHub prerelease](https://github.com/JohnLuis07/driver-test/releases/tag/panvk-g615-alpha01). Local builds write these files to `dist/`.
 
 - [Build and packaging](BUILD.md)
+- [Codespace handoff and USB test](docs/HANDOFF.md)
 - [Device test procedure](TESTING.md)
 - [Source selection and rendering investigation](docs/research.md)
 - [Reference package analysis](reference/README.md)
