@@ -1,0 +1,422 @@
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -49,26 +49,25 @@
+ 
+ #ifdef VK_USE_PLATFORM_ANDROID_KHR
+ #include <android/native_window.h>
+-#include <android/hardware_buffer.h>
+ #include "wsi_common_private.h"
+ #include "panvk_android.h"
+ #include "panvk_device.h"
+ #include "panvk_entrypoints.h"
+ #include "panvk_image.h"
+ #include "vk_object.h"
+-#include "vk_android.h"
+-
+-struct panvk_android_swapchain_image {
+-   struct wsi_image base;
+-   AHardwareBuffer *ahb;
+-};
++#include "util/log.h"
+ 
+ struct panvk_android_swapchain {
+    struct wsi_swapchain base;
+    ANativeWindow *window;
+    uint32_t next_image;
+    uint64_t completed_present_id;
+-   struct panvk_android_swapchain_image images[4];
++   VkExtent2D extent;
++   VkFormat format;
++   bool opaque;
++   uint32_t acquired_count;
++   uint32_t presented_count;
++   struct wsi_image images[4];
+ };
+ 
+ static VkResult
+@@ -216,7 +215,7 @@
+                                      uint32_t image_index)
+ {
+    struct panvk_android_swapchain *chain = (struct panvk_android_swapchain *)swapchain;
+-   return &chain->images[image_index].base;
++   return &chain->images[image_index];
+ }
+ 
+ static VkResult
+@@ -225,11 +224,23 @@
+    const VkAcquireNextImageInfoKHR *info,
+    uint32_t *image_index)
+ {
+-   struct panvk_android_swapchain *chain = (struct panvk_android_swapchain *)swapchain;
+-    uint32_t idx = chain->next_image;
+-    chain->next_image = (chain->next_image + 1) % chain->base.image_count;
+-    *image_index = idx;
+-    return VK_SUCCESS;
++   struct panvk_android_swapchain *chain =
++      (struct panvk_android_swapchain *)swapchain;
++   for (uint32_t i = 0; i < swapchain->image_count; i++) {
++      uint32_t idx = (chain->next_image + i) % swapchain->image_count;
++      if (chain->images[idx].acquired)
++         continue;
++
++      *image_index = idx;
++      chain->next_image = (idx + 1) % swapchain->image_count;
++      if (chain->acquired_count < swapchain->image_count) {
++         chain->acquired_count++;
++         mesa_logi("panvk: Android acquired image %u", idx);
++      }
++      return VK_SUCCESS;
++   }
++
++   return info->timeout ? VK_TIMEOUT : VK_NOT_READY;
+ }
+ 
+ static VkResult
+@@ -265,36 +276,76 @@
+    uint64_t present_id,
+    const VkPresentRegionKHR *damage)
+ {
+-   struct panvk_android_swapchain *chain = (struct panvk_android_swapchain *)swapchain;
+-   if (image_index >= chain->base.image_count)
+-      return VK_ERROR_OUT_OF_DATE_KHR;
+-
+-   VK_FROM_HANDLE(vk_device, dev, swapchain->device);
+-   dev->dispatch_table.DeviceWaitIdle(swapchain->device);
+-
+-   if (chain->window && chain->images[image_index].ahb) {
+-      ANativeWindow_Buffer win_buf;
+-      if (ANativeWindow_lock(chain->window, &win_buf, NULL) == 0) {
+-         void *ahb_data = NULL;
+-         AHardwareBuffer_Desc desc;
+-         AHardwareBuffer_describe(chain->images[image_index].ahb, &desc);
+-         if (AHardwareBuffer_lock(chain->images[image_index].ahb,
+-                                  AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, NULL, &ahb_data) == 0) {
+-            uint32_t copy_h = win_buf.height < (int)desc.height ? (uint32_t)win_buf.height : desc.height;
+-            uint32_t copy_w = win_buf.width < (int)desc.width ? (uint32_t)win_buf.width : desc.width;
+-            for (uint32_t y = 0; y < copy_h; y++) {
+-               memcpy((char *)win_buf.bits + y * win_buf.stride * 4,
+-                      (char *)ahb_data + y * desc.stride * 4,
+-                      copy_w * 4);
++   struct panvk_android_swapchain *chain =
++      (struct panvk_android_swapchain *)swapchain;
++   const struct wsi_device *wsi = swapchain->wsi;
++   struct wsi_image *image = &chain->images[image_index];
++   VkResult result = wsi->WaitForFences(swapchain->device, 1,
++                                        &swapchain->fences[image_index],
++                                        VK_TRUE, UINT64_MAX);
++   if (result != VK_SUCCESS) {
++      mesa_loge("panvk: Android present image %u GPU copy fence failed (%d)",
++                image_index, result);
++      return result;
++   }
++
++   const uint32_t width = chain->extent.width;
++   const uint32_t height = chain->extent.height;
++   const uint8_t *pixels = image->cpu_map;
++   const size_t pitch = image->row_pitches[0];
++   if (!pixels || pitch < (size_t)width * 4 ||
++       (uint64_t)pitch * (height - 1) + (uint64_t)width * 4 > image->sizes[0])
++      return VK_ERROR_INITIALIZATION_FAILED;
++
++   ANativeWindow_Buffer window;
++   int status = ANativeWindow_lock(chain->window, &window, NULL);
++   if (status != 0) {
++      mesa_loge("panvk: Android present window lock failed (%d)", status);
++      return VK_ERROR_SURFACE_LOST_KHR;
++   }
++
++   const bool valid = window.bits && window.width == (int)width &&
++                      window.height == (int)height && window.stride >= window.width &&
++                      (window.format == WINDOW_FORMAT_RGBA_8888 ||
++                       window.format == WINDOW_FORMAT_RGBX_8888);
++   if (valid) {
++      for (uint32_t y = 0; y < height; y++) {
++         const uint8_t *src = pixels + (size_t)y * pitch;
++         uint8_t *dst = (uint8_t *)window.bits + (size_t)y * window.stride * 4;
++         const bool bgra = chain->format == VK_FORMAT_B8G8R8A8_UNORM;
++         const bool force_alpha = chain->opaque &&
++                                  window.format == WINDOW_FORMAT_RGBA_8888;
++         if (bgra || force_alpha) {
++            for (uint32_t x = 0; x < width; x++, src += 4, dst += 4) {
++               dst[0] = src[bgra ? 2 : 0];
++               dst[1] = src[1];
++               dst[2] = src[bgra ? 0 : 2];
++               dst[3] = force_alpha ? 255 : src[3];
+             }
+-            AHardwareBuffer_unlock(chain->images[image_index].ahb, NULL);
++         } else {
++            memcpy(dst, src, (size_t)width * 4);
+          }
+-         ANativeWindow_unlockAndPost(chain->window);
+-      }
+-   }
+-
++      }
++   }
++   status = ANativeWindow_unlockAndPost(chain->window);
++   if (!valid || status != 0) {
++      mesa_loge("panvk: Android present window copy/post failed (layout=%d, post=%d)",
++                valid, status);
++      return status ? VK_ERROR_SURFACE_LOST_KHR : VK_ERROR_OUT_OF_DATE_KHR;
++   }
++
++   if (chain->presented_count < 4) {
++      uint32_t nonblack = 0;
++      for (uint32_t y = 0; y < height; y++) {
++         const uint8_t *row = pixels + (size_t)y * pitch;
++         for (uint32_t x = 0; x < width; x++, row += 4)
++            nonblack += (row[0] | row[1] | row[2]) != 0;
++      }
++      mesa_logi("panvk: Android present %u image=%u format=%d %ux%u fence=ready nonblack=%u post=0",
++                ++chain->presented_count, image_index, chain->format,
++                width, height, nonblack);
++   }
+    chain->completed_present_id = MAX2(chain->completed_present_id, present_id);
+-
+    return VK_SUCCESS;
+ }
+ 
+@@ -303,20 +354,15 @@
+    struct wsi_swapchain *swapchain,
+    const VkAllocationCallbacks *pAllocator)
+ {
+-   struct panvk_android_swapchain *chain = (struct panvk_android_swapchain *)swapchain;
++   struct panvk_android_swapchain *chain =
++      (struct panvk_android_swapchain *)swapchain;
+    VK_FROM_HANDLE(vk_device, dev, swapchain->device);
+ 
+-   vk_android_set_owned_ahb(NULL);
+-   for (uint32_t i = 0; i < chain->base.image_count; i++) {
+-      if (chain->images[i].base.image != VK_NULL_HANDLE)
+-         dev->dispatch_table.DestroyImage(swapchain->device, chain->images[i].base.image, pAllocator);
+-      if (chain->images[i].base.memory != VK_NULL_HANDLE)
+-         dev->dispatch_table.FreeMemory(swapchain->device, chain->images[i].base.memory, pAllocator);
+-      if (chain->images[i].ahb)
+-         AHardwareBuffer_release(chain->images[i].ahb);
+-   }
+-
+-   wsi_swapchain_finish(&chain->base);
++   for (uint32_t i = 0; i < swapchain->image_count; i++)
++      wsi_destroy_image(swapchain, &chain->images[i]);
++
++   wsi_swapchain_finish(swapchain);
++   ANativeWindow_release(chain->window);
+    vk_free2(&dev->alloc, pAllocator, chain);
+    return VK_SUCCESS;
+ }
+@@ -330,135 +376,73 @@
+    const VkAllocationCallbacks *pAllocator,
+    struct wsi_swapchain **swapchain_out)
+ {
+-    VK_FROM_HANDLE(vk_device, dev, device);
+-    VkResult result;
+-    uint32_t num_images = pCreateInfo->minImageCount < 2 ? 2 : pCreateInfo->minImageCount;
+-    if (num_images > 4) num_images = 4;
+-
+-    struct panvk_android_swapchain *chain = vk_zalloc2(
+-       &dev->alloc, pAllocator, sizeof(*chain), 8,
+-       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+-    if (!chain)
+-       return VK_ERROR_OUT_OF_HOST_MEMORY;
+-
+-    vk_object_base_init(dev, &chain->base.base, VK_OBJECT_TYPE_SWAPCHAIN_KHR);
+-    chain->base.wsi = wsi_device;
+-    chain->base.device = device;
+-    chain->base.alloc = *pAllocator;
+-    chain->base.blit.type = WSI_SWAPCHAIN_NO_BLIT;
+-    chain->base.destroy = panvk_android_swapchain_destroy;
+-    chain->base.get_wsi_image = panvk_android_swapchain_get_wsi_image;
++   VK_FROM_HANDLE(vk_device, dev, device);
++   VkIcdSurfaceAndroid *android_surface = (VkIcdSurfaceAndroid *)surface;
++   if (!android_surface->window)
++      return VK_ERROR_SURFACE_LOST_KHR;
++
++   struct panvk_android_swapchain *chain = vk_zalloc2(
++      &dev->alloc, pAllocator, sizeof(*chain), 8,
++      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
++   if (!chain)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   const struct wsi_cpu_image_params params = {
++      .base.image_type = WSI_IMAGE_TYPE_CPU,
++      .force_buffer_blit = true,
++   };
++   VkResult result = wsi_swapchain_init(wsi_device, &chain->base, device,
++                                        pCreateInfo, &params.base, pAllocator);
++   if (result != VK_SUCCESS) {
++      mesa_loge("panvk: Android CPU swapchain initialization failed (%d)", result);
++      vk_free2(&dev->alloc, pAllocator, chain);
++      return result;
++   }
++
++   chain->base.destroy = panvk_android_swapchain_destroy;
++   chain->base.get_wsi_image = panvk_android_swapchain_get_wsi_image;
+    chain->base.acquire_next_image = panvk_android_swapchain_acquire_next_image;
+    chain->base.queue_present = panvk_android_swapchain_queue_present;
++   chain->base.wait_for_present = panvk_android_swapchain_wait_for_present2;
+    chain->base.wait_for_present2 = panvk_android_swapchain_wait_for_present2;
+    chain->base.release_images = panvk_android_swapchain_release_images;
+-   chain->base.image_count = num_images;
+-   chain->next_image = 0;
+-
+-   VkIcdSurfaceAndroid *android_surface = (VkIcdSurfaceAndroid *)surface;
++   chain->base.sw_fence_wait_in_present_thread = true;
++   chain->base.present_mode = pCreateInfo->presentMode;
+    chain->window = android_surface->window;
+-   if (chain->window) {
+-      ANativeWindow_setBuffersGeometry(chain->window,
+-                                       pCreateInfo->imageExtent.width,
+-                                       pCreateInfo->imageExtent.height,
+-                                       WINDOW_FORMAT_RGBA_8888);
+-   }
+-
+-   for (uint32_t i = 0; i < num_images; i++) {
+-      AHardwareBuffer_Desc desc = {
+-         .width = pCreateInfo->imageExtent.width,
+-         .height = pCreateInfo->imageExtent.height,
+-         .layers = 1,
+-         .format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
+-         .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
+-                  AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+-                  AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+-      };
+-      if (AHardwareBuffer_allocate(&desc, &chain->images[i].ahb) != 0 || !chain->images[i].ahb) {
+-         panvk_android_swapchain_destroy(&chain->base, pAllocator);
+-         return VK_ERROR_INITIALIZATION_FAILED;
+-      }
+-      /* Ours and still undefined: the no-mapper linear probe may write it. */
+-      vk_android_set_owned_ahb(chain->images[i].ahb);
+-
+-      VkExternalMemoryImageCreateInfo emici = {
+-         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+-         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID,
+-      };
+-      VkImageCreateInfo ici = {
+-         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+-         .pNext = &emici,
+-         .imageType = VK_IMAGE_TYPE_2D,
+-         .format = pCreateInfo->imageFormat,
+-         .extent = {pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, 1},
+-         .mipLevels = 1,
+-         .arrayLayers = 1,
+-         .samples = VK_SAMPLE_COUNT_1_BIT,
+-         .tiling = VK_IMAGE_TILING_OPTIMAL,
+-         .usage = pCreateInfo->imageUsage,
+-         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+-         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+-      };
+-      result = dev->dispatch_table.CreateImage(device, &ici, pAllocator, &chain->images[i].base.image);
++   chain->extent = pCreateInfo->imageExtent;
++   chain->format = pCreateInfo->imageFormat;
++   chain->opaque = pCreateInfo->compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++   ANativeWindow_acquire(chain->window);
++
++   int status = ANativeWindow_setBuffersGeometry(chain->window,
++                                                   chain->extent.width,
++                                                   chain->extent.height,
++                                                   chain->opaque ? WINDOW_FORMAT_RGBX_8888 :
++                                                                   WINDOW_FORMAT_RGBA_8888);
++   if (status != 0) {
++      mesa_loge("panvk: Android swapchain window geometry failed (%d)", status);
++      result = VK_ERROR_SURFACE_LOST_KHR;
++      goto fail;
++   }
++
++   const uint32_t count = CLAMP(pCreateInfo->minImageCount, 2, ARRAY_SIZE(chain->images));
++   for (uint32_t i = 0; i < count; i++) {
++      result = wsi_create_image(&chain->base, &chain->base.image_info, &chain->images[i]);
+       if (result != VK_SUCCESS) {
+-         panvk_android_swapchain_destroy(&chain->base, pAllocator);
+-         return result;
+-      }
+-
+-      VkAndroidHardwareBufferPropertiesANDROID ahb_props = {
+-         .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID,
+-      };
+-      result = panvk_GetAndroidHardwareBufferPropertiesANDROID(device, chain->images[i].ahb, &ahb_props);
+-      if (result != VK_SUCCESS) {
+-         panvk_android_swapchain_destroy(&chain->base, pAllocator);
+-         return result;
+-      }
+-
+-      uint32_t chosen_mi = 0;
+-      for (uint32_t m = 0; m < 32; m++) {
+-         if (ahb_props.memoryTypeBits & (1u << m)) {
+-            chosen_mi = m;
+-            break;
+-         }
+-      }
+-
+-      VkImportAndroidHardwareBufferInfoANDROID imp = {
+-         .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
+-         .buffer = chain->images[i].ahb,
+-      };
+-      VkMemoryDedicatedAllocateInfo dai = {
+-         .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+-         .pNext = &imp,
+-         .image = chain->images[i].base.image,
+-      };
+-      VkMemoryAllocateInfo mai = {
+-         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+-         .pNext = &dai,
+-         .allocationSize = ahb_props.allocationSize,
+-         .memoryTypeIndex = chosen_mi,
+-      };
+-      result = dev->dispatch_table.AllocateMemory(device, &mai, pAllocator, &chain->images[i].base.memory);
+-      if (result != VK_SUCCESS) {
+-         panvk_android_swapchain_destroy(&chain->base, pAllocator);
+-         return result;
+-      }
+-
+-      VkBindImageMemoryInfo bmi = {
+-         .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+-         .image = chain->images[i].base.image,
+-         .memory = chain->images[i].base.memory,
+-         .memoryOffset = 0,
+-      };
+-      result = dev->dispatch_table.BindImageMemory2(device, 1, &bmi);
+-      if (result != VK_SUCCESS) {
+-         panvk_android_swapchain_destroy(&chain->base, pAllocator);
+-         return result;
+-      }
+-   }
+-   vk_android_set_owned_ahb(NULL);
+-
++         mesa_loge("panvk: Android CPU swapchain image %u creation failed (%d)", i, result);
++         goto fail;
++      }
++      chain->base.image_count++;
++   }
++
++   mesa_logi("panvk: Android CPU swapchain created %ux%u format=%d images=%u",
++             chain->extent.width, chain->extent.height, chain->format, count);
+    *swapchain_out = &chain->base;
+    return VK_SUCCESS;
++
++fail:
++   panvk_android_swapchain_destroy(&chain->base, pAllocator);
++   return result;
+ }
+ 
+ VKAPI_ATTR VkResult VKAPI_CALL
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -3600,7 +3600,7 @@
+ wsi_cpu_image_needs_buffer_blit(const struct wsi_device *wsi,
+                                 const struct wsi_cpu_image_params *params)
+ {
+-   if (WSI_DEBUG & WSI_DEBUG_BUFFER)
++   if (params->force_buffer_blit || (WSI_DEBUG & WSI_DEBUG_BUFFER))
+       return true;
+ 
+    if (wsi->wants_linear)
+--- a/src/vulkan/wsi/wsi_common_private.h
++++ b/src/vulkan/wsi/wsi_common_private.h
+@@ -57,6 +57,7 @@
+ 
+ struct wsi_cpu_image_params {
+    struct wsi_base_image_params base;
++   bool force_buffer_blit;
+ 
+    uint8_t *(*alloc_shm)(struct wsi_image *image, unsigned size);
+ };

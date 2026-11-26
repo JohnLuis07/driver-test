@@ -1,6 +1,6 @@
 # Infinix GT 30 Pro validation
 
-For the next test, install `PanVK-G615-Alpha02.adpkg.zip` and use the [conservative settings and A/B procedure](docs/alpha02-investigation.md#next-comparison). Keep Alpha 01 installed for rollback. The procedure below records the original Alpha 01 baseline.
+For the next test, install `PanVK-G615-Alpha03.adpkg.zip` and follow the [rendering recovery test plan](docs/alpha03-rendering.md#validation). Keep Alpha 01 installed for rollback. The procedure below records the original Alpha 01 baseline.
 
 Use Peanuts Native 0.1.8 and the same game update, save, resolution, console mode and graphics settings for every run.
 

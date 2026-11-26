@@ -1,0 +1,223 @@
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -144,7 +144,7 @@
+ vk_gralloc_to_drm_explicit_layout(
+    struct u_gralloc_buffer_handle *in_hnd,
+    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+-   VkSubresourceLayout *out_layouts, int max_planes)
++   VkSubresourceLayout *out_layouts, int max_planes, int *plane_fd)
+ {
+    struct u_gralloc_buffer_basic_info info;
+    struct u_gralloc *u_gralloc = vk_android_get_ugralloc();
+@@ -155,7 +155,7 @@
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+-   if (info.num_planes > max_planes) {
++   if (info.num_planes <= 0 || info.num_planes > max_planes) {
+       mesa_loge("info.num_planes(%u) > max_planes(%u) unsupported",
+                 info.num_planes, max_planes);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+@@ -173,6 +173,14 @@
+    if (is_disjoint) {
+       /* We don't support disjoint planes yet */
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
++
++   if (plane_fd) {
++      for (int i = 0; i < info.num_planes; i++) {
++         if (info.fds[i] < 0 || info.fds[i] != info.fds[0])
++            return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++      }
++      *plane_fd = info.fds[0];
+    }
+ 
+    memset(out, 0, sizeof(*out));
+@@ -212,14 +220,12 @@
+ }
+ 
+ VkResult
+-vk_android_import_anb_memory(struct vk_device *device,
+-                             struct vk_image *image,
+-                             const VkNativeBufferANDROID *anb,
+-                             const VkAllocationCallbacks *alloc)
+-{
+-   assert(anb && anb->handle && anb->handle->numFds > 0);
+-
+-   int dma_buf_fd = anb->handle->data[0];
++vk_android_import_anb_memory_fd(struct vk_device *device,
++                                struct vk_image *image, int dma_buf_fd,
++                                const VkAllocationCallbacks *alloc)
++{
++   if (dma_buf_fd < 0)
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+ 
+    /* Query image memory requirements for size and supported memory types */
+    VkMemoryRequirements mem_reqs;
+@@ -280,6 +286,17 @@
+ }
+ 
+ VkResult
++vk_android_import_anb_memory(struct vk_device *device,
++                             struct vk_image *image,
++                             const VkNativeBufferANDROID *anb,
++                             const VkAllocationCallbacks *alloc)
++{
++   assert(anb && anb->handle && anb->handle->numFds > 0);
++   return vk_android_import_anb_memory_fd(device, image, anb->handle->data[0],
++                                          alloc);
++}
++
++VkResult
+ vk_android_import_anb(struct vk_device *device,
+                       const VkImageCreateInfo *pCreateInfo,
+                       const VkAllocationCallbacks *alloc,
+@@ -306,10 +323,10 @@
+ }
+ 
+ VkResult
+-vk_android_get_anb_layout(
++vk_android_get_anb_layout_fd(
+    const VkImageCreateInfo *pCreateInfo,
+    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+-   VkSubresourceLayout *out_layouts, int max_planes)
++   VkSubresourceLayout *out_layouts, int max_planes, int *plane_fd)
+ {
+    const VkNativeBufferANDROID *native_buffer =
+       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
+@@ -321,7 +338,17 @@
+    };
+ 
+    return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
+-                                            out_layouts, max_planes);
++                                            out_layouts, max_planes, plane_fd);
++}
++
++VkResult
++vk_android_get_anb_layout(
++   const VkImageCreateInfo *pCreateInfo,
++   VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
++   VkSubresourceLayout *out_layouts, int max_planes)
++{
++   return vk_android_get_anb_layout_fd(pCreateInfo, out, out_layouts,
++                                        max_planes, NULL);
+ }
+ 
+ VkResult
+@@ -791,7 +818,7 @@
+    };
+ 
+    VkResult result = vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
+-                                                       out_layouts, max_planes);
++                                                       out_layouts, max_planes, NULL);
+    if (result == VK_ERROR_INVALID_EXTERNAL_HANDLE)
+       result = vk_android_probe_linear_ahb(ahardware_buffer, &description,
+                                            handle, out, out_layouts, max_planes);
+--- a/src/vulkan/runtime/vk_android.h
++++ b/src/vulkan/runtime/vk_android.h
+@@ -57,6 +57,15 @@
+    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+    VkSubresourceLayout *out_layouts, int max_planes);
+ 
++VkResult vk_android_import_anb_memory_fd(struct vk_device *device,
++                                         struct vk_image *image, int dma_buf_fd,
++                                         const VkAllocationCallbacks *alloc);
++
++VkResult vk_android_get_anb_layout_fd(
++   const VkImageCreateInfo *pCreateInfo,
++   VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
++   VkSubresourceLayout *out_layouts, int max_planes, int *plane_fd);
++
+ VkResult vk_android_init_deferred_image(struct vk_device *device,
+                                         struct vk_image *image,
+                                         const VkImageCreateInfo *pCreateInfo,
+--- a/src/panfrost/vulkan/panvk_android.c
++++ b/src/panfrost/vulkan/panvk_android.c
+@@ -115,15 +115,15 @@
+ static VkResult
+ panvk_android_anb_init(struct panvk_device *dev,
+                        const VkImageCreateInfo *create_info,
+-                       struct panvk_image *img)
++                       struct panvk_image *img, int *plane_fd)
+ {
+    VkResult result;
+ 
+    VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
+    VkSubresourceLayout layouts[PANVK_MAX_PLANES];
+    assert(vk_find_struct_const(create_info->pNext, NATIVE_BUFFER_ANDROID));
+-   result = vk_android_get_anb_layout(create_info, &mod_info, layouts,
+-                                      PANVK_MAX_PLANES);
++   result = vk_android_get_anb_layout_fd(create_info, &mod_info, layouts,
++                                         PANVK_MAX_PLANES, plane_fd);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -169,14 +169,24 @@
+    create_info.tiling = img->vk.tiling =
+       VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+ 
+-   result = panvk_android_anb_init(dev, &create_info, img);
++   int plane_fd;
++   result = panvk_android_anb_init(dev, &create_info, img, &plane_fd);
+    if (result != VK_SUCCESS) {
+       vk_image_destroy(&dev->vk, pAllocator, &img->vk);
+       return panvk_error(device, result);
+    }
+ 
+    VkImage img_handle = panvk_image_to_handle(img);
+-   result = vk_android_import_anb(&dev->vk, &create_info, pAllocator, &img->vk);
++   result = vk_android_import_anb_memory_fd(&dev->vk, &img->vk, plane_fd,
++                                             pAllocator);
++   if (result == VK_SUCCESS) {
++      const VkBindImageMemoryInfo bind_info = {
++         .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
++         .image = img_handle,
++         .memory = img->vk.anb_memory,
++      };
++      result = dev->vk.dispatch_table.BindImageMemory2(device, 1, &bind_info);
++   }
+    if (result != VK_SUCCESS) {
+       dev->vk.dispatch_table.DestroyImage(device, img_handle, pAllocator);
+       return panvk_error(device, result);
+@@ -207,13 +217,15 @@
+     */
+    VkNativeBufferANDROID local_anb = *anb;
+    local_anb.pNext = create_info->pNext;
+-   create_info->pNext = &local_anb;
+-   result = panvk_android_anb_init(dev, create_info, img);
++   VkImageCreateInfo local_create = *create_info;
++   local_create.pNext = &local_anb;
++   int plane_fd;
++   result = panvk_android_anb_init(dev, &local_create, img, &plane_fd);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+    result =
+-      vk_android_import_anb_memory(&dev->vk, &img->vk, anb, &dev->vk.alloc);
++      vk_android_import_anb_memory_fd(&dev->vk, &img->vk, plane_fd, &dev->vk.alloc);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -236,15 +248,16 @@
+       vk_android_get_ahb_layout(ahb, &mod_info, layouts, PANVK_MAX_PLANES);
+    if (result != VK_SUCCESS)
+       return result;
+-   __vk_append_struct(img->vk.android_deferred_create_info, &mod_info);
+-
+-   VkExternalMemoryImageCreateInfo external_info = {
++   VkImageCreateInfo create_info = *img->vk.android_deferred_create_info;
++   mod_info.pNext = create_info.pNext;
++   const VkExternalMemoryImageCreateInfo external_info = {
+       .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++      .pNext = &mod_info,
+       .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+    };
+-   __vk_append_struct(img->vk.android_deferred_create_info, &external_info);
+-
+-   result = panvk_image_init(img, img->vk.android_deferred_create_info);
++   create_info.pNext = &external_info;
++
++   result = panvk_image_init(img, &create_info);
+    if (result != VK_SUCCESS)
+       return result;
+ 

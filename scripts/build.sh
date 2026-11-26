@@ -31,7 +31,7 @@ if [[ ! -f build/patch.complete ]]; then
     "$kbase/scripts/apply-patches.sh" --profile "$PROFILE" --mesa "$mesa" > build/patch.log 2>&1
     touch build/patch.complete
 fi
-for patch in "$root"/patches/alpha02-*.patch; do
+for patch in "$root"/patches/alpha02-push-descriptor-slots.patch "$root"/patches/alpha03-*.patch; do
     if git -C "$mesa" apply --check "$patch" 2>/dev/null; then
         git -C "$mesa" apply "$patch"
     else

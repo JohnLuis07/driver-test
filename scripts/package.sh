@@ -3,10 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/versions.sh
 export LC_ALL=C TZ=UTC
-base=PanVK-G615-Alpha02
+base=PanVK-G615-Alpha03
 target=build/android
 if [[ ${1:-} == --diagnostic && $# == 1 ]]; then
-    base=PanVK-G615-Alpha02-Diagnostic
+    base=PanVK-G615-Alpha03-Diagnostic
     target="${PANVK_DIAGNOSTIC_BUILDDIR:-build/android-diagnostic}"
 elif [[ $# != 0 ]]; then
     echo "Usage: $0 [--diagnostic]" >&2
@@ -75,10 +75,10 @@ assert "GLIBC_" not in readelf("--version-info")
 
 meta = {
     "schemaVersion": 1,
-    "name": "PanVK G615 Alpha 02",
-    "description": "Android arm64 PanVK stability build with push-descriptor bounds fixes.",
+    "name": "PanVK G615 Alpha 03",
+    "description": "Android arm64 PanVK rendering recovery build with staged Android presentation.",
     "author": "Mesa and zenithblue-oss contributors",
-    "packageVersion": "Alpha02",
+    "packageVersion": "Alpha03",
     "vendor": "Mesa",
     "driverVersion": "26.3.0-devel",
     "minApi": int(api),
@@ -89,14 +89,15 @@ manifest = {
     "sha256": hashlib.sha256(data).hexdigest(), "buildId": build_id,
     "localPatchSha256": {
         patch.name: hashlib.sha256(patch.read_bytes()).hexdigest()
-        for patch in sorted(Path("patches").glob("alpha02-*.patch"))
+        for patch in (Path("patches/alpha02-push-descriptor-slots.patch"),
+                      *sorted(Path("patches").glob("alpha03-*.patch")))
     },
     "needed": sorted(needed), "exports": sorted(required),
 }
 if base.endswith("-Diagnostic"):
     meta["name"] += " Diagnostic"
     meta["packageVersion"] += "-Diagnostic"
-    meta["description"] = "Alpha 02 stability build with separately retained debug symbols."
+    meta["description"] = "Alpha 03 stability build with separately retained debug symbols."
 
 with zipfile.ZipFile(stage / "driver.zip", "w", zipfile.ZIP_DEFLATED) as out:
     for name, contents in {

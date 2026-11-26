@@ -1,5 +1,11 @@
 # Changelog
 
+## G615 Alpha 03
+
+- Reused Mesa CPU WSI staging for Android ICD swapchain presentation and report window lock, layout, fence and post errors.
+- Selected native-buffer DMA-BUF FDs from gralloc plane metadata and confined temporary Android image creation chains to their calls.
+- Logged early swapchain activity and synchronized nonblack pixel counts. Added a color-order conversion and opaque composition handling.
+
 ## G615 Alpha 02
 
 - Corrected push descriptor storage and graphics/compute meta snapshots to account for expansion from logical Vulkan descriptors to hardware records. Kept the advertised limit at 32.
@@ -12,5 +18,3 @@
 - Pinned the public kbase series to its declared Mesa commit and used the G615 CSF profile.
 - Added Android ARM64 build, package validation and source/notice packaging.
 - Preserved the pinned implementation's feature reporting and synchronization behavior.
-
-Alpha 03 is deferred pending stability evidence.
