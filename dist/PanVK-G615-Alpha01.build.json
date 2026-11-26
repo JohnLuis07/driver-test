@@ -1,0 +1,21 @@
+{
+  "mesaCommit": "5a07217f034b3e50d8c7c7794f97a2df1742613b",
+  "kbasePatchCommit": "5b87b74d3e2580d5816e7f2c629f6f016a462f28",
+  "sha256": "663f55d1ea3be7d44915033c44aecff3e817ca5c6a6ade6e86e81e602279c169",
+  "buildId": "cf58a336284de4de1dfbc18e17c8beb18bc50efe",
+  "needed": [
+    "libc.so",
+    "libdl.so",
+    "liblog.so",
+    "libm.so",
+    "libnativewindow.so",
+    "libsync.so",
+    "libz.so"
+  ],
+  "exports": [
+    "HMI",
+    "vk_icdGetInstanceProcAddr",
+    "vk_icdGetPhysicalDeviceProcAddr",
+    "vk_icdNegotiateLoaderICDInterfaceVersion"
+  ]
+}
