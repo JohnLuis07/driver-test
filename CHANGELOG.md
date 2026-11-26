@@ -1,5 +1,15 @@
 # Changelog
 
+## G615 Alpha 07 Linear Preview
+
+- Request CPU-accessible RGBA8/BGRA8 display buffers so Android gralloc can select a linear layout. The driver still renders and presents through its GPU path.
+- The comparison targets an Alpha 06 run with valid Android screenshots and a washed-out image on the physical Infinix panel.
+
+## G615 Alpha 06 Preview
+
+- Route Android release-fence submission through the kbase queue so kbase semaphores are handled by their own backend.
+- Verified successful release-fence export on the Infinix after Alpha 05 had repeatedly returned `VK_ERROR_UNKNOWN` during presentation.
+
 ## G615 Alpha 05
 
 - Added the kbase swapchain allocation preference to Android 16's primary AHB usage query.

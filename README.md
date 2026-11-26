@@ -2,6 +2,8 @@
 
 Independent Mesa PanVK baseline for the Infinix GT 30 Pro (X6873), Mali-G615 MC6, Android 16 and Peanuts Native 0.1.8. The first target is Pokémon Legends: Z-A (`0100F43008C44000`).
 
+The [Alpha 07 Linear Preview](docs/alpha07-linear-display.md) tests uncompressed display buffers on the Infinix. The [Alpha 06 Preview](docs/alpha06-present-sync.md) fixed the release-fence failure on the phone, where screenshots rendered clearly and the panel image was washed out. Both local preview packages are in `dist/`.
+
 The experimental [Alpha 05 prerelease](https://github.com/JohnLuis07/driver-test/releases/tag/panvk-g615-alpha05) covers Android 16's AHB usage negotiation and mapper FD selection. [Source audit and device test](docs/alpha05-wsi.md)
 
 The [Alpha 04 prerelease](https://github.com/JohnLuis07/driver-test/releases/tag/panvk-g615-alpha04) targets the platform Android native-buffer import route. See the [call-path audit and test plan](docs/alpha04-wsi.md).

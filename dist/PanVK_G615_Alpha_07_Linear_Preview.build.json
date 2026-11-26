@@ -1,0 +1,20 @@
+{
+  "basePackageSha256": "ca3238ea1e76307e2a24345e76de2fdaad53b8025ae49014db30cfb79a9bf359",
+  "baseLibrarySha256": "1fe54be1ff4294a08cb4719e298e0b7f7850f0a74aa5cf3381da6c4a91fc471a",
+  "baseBuildId": "0e13290832503280901470b99363acf283e55bbd",
+  "sha256": "dd5c9fe6c7b077eb03987afa60195ea76a08547359db403f901bb595b82a418a",
+  "buildId": "d9d4647313ad970e785caac64dfac0517291875b",
+  "sourcePatch": "alpha07-linear-display-buffer.patch",
+  "sourcePatchSha256": "d4a08c8fc98def434bf58e335b7cb3595bf8dfcc510fa8c741804382e65e8c1e",
+  "callbackStoreFileOffsets": [
+    "0xd53104",
+    "0xd7d128",
+    "0xda6de4",
+    "0xde25b4",
+    "0xebef28",
+    "0xf82af4",
+    "0x1046804",
+    "0x110a6ac"
+  ],
+  "preferredUsageFileOffset": "0xd404e8"
+}

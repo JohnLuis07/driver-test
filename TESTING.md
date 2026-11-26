@@ -1,6 +1,6 @@
 # Infinix GT 30 Pro validation
 
-For the next test, install `PanVK_G615_Alpha_05.adpkg.zip` and follow the [Android 16 WSI test plan](docs/alpha05-wsi.md#device-validation). Keep Alpha 01 installed for rollback. The procedure below records the original Alpha 01 baseline.
+For the next test, use `PanVK_G615_Alpha_07_Linear_Preview.adpkg.zip` and follow the [display-buffer test plan](docs/alpha07-linear-display.md#device-validation). The procedure below records the original Alpha 01 baseline.
 
 Use Peanuts Native 0.1.8 and the same game update, save, resolution, console mode and graphics settings for every run.
 
