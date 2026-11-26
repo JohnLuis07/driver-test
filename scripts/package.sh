@@ -3,10 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/versions.sh
 export LC_ALL=C TZ=UTC
-base=PanVK-G615-Alpha03
+base=PanVK_G615_Alpha_04
 target=build/android
 if [[ ${1:-} == --diagnostic && $# == 1 ]]; then
-    base=PanVK-G615-Alpha03-Diagnostic
+    base=PanVK_G615_Alpha_04_Diagnostic
     target="${PANVK_DIAGNOSTIC_BUILDDIR:-build/android-diagnostic}"
 elif [[ $# != 0 ]]; then
     echo "Usage: $0 [--diagnostic]" >&2
@@ -75,10 +75,10 @@ assert "GLIBC_" not in readelf("--version-info")
 
 meta = {
     "schemaVersion": 1,
-    "name": "PanVK G615 Alpha 03",
-    "description": "Android arm64 PanVK rendering recovery build with staged Android presentation.",
+    "name": "PanVK G615 Alpha 04",
+    "description": "Android arm64 PanVK Android presentation build with validated MediaTek native-buffer layouts.",
     "author": "Mesa and zenithblue-oss contributors",
-    "packageVersion": "Alpha03",
+    "packageVersion": "Alpha04",
     "vendor": "Mesa",
     "driverVersion": "26.3.0-devel",
     "minApi": int(api),
@@ -90,14 +90,14 @@ manifest = {
     "localPatchSha256": {
         patch.name: hashlib.sha256(patch.read_bytes()).hexdigest()
         for patch in (Path("patches/alpha02-push-descriptor-slots.patch"),
-                      *sorted(Path("patches").glob("alpha03-*.patch")))
+                      *sorted(Path("patches").glob("alpha0[34]-*.patch")))
     },
     "needed": sorted(needed), "exports": sorted(required),
 }
-if base.endswith("-Diagnostic"):
+if base.endswith("_Diagnostic"):
     meta["name"] += " Diagnostic"
     meta["packageVersion"] += "-Diagnostic"
-    meta["description"] = "Alpha 03 stability build with separately retained debug symbols."
+    meta["description"] = "Alpha 04 stability build with separately retained debug symbols."
 
 with zipfile.ZipFile(stage / "driver.zip", "w", zipfile.ZIP_DEFLATED) as out:
     for name, contents in {
@@ -116,7 +116,7 @@ with zipfile.ZipFile(stage / "driver.zip") as archive:
 print(json.dumps(manifest, indent=2))
 PY
 
-if [[ $base == *-Diagnostic ]]; then
+if [[ $base == *_Diagnostic ]]; then
     "$bin/llvm-objcopy" --only-keep-debug "$installed" "$stage/$lib.debug"
     readelf -SW "$stage/$lib.debug" > "$stage/sections.txt"
     grep -q '\.debug_line' "$stage/sections.txt"

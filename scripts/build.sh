@@ -31,13 +31,22 @@ if [[ ! -f build/patch.complete ]]; then
     "$kbase/scripts/apply-patches.sh" --profile "$PROFILE" --mesa "$mesa" > build/patch.log 2>&1
     touch build/patch.complete
 fi
-for patch in "$root"/patches/alpha02-push-descriptor-slots.patch "$root"/patches/alpha03-*.patch; do
+apply_local_patch() {
+    local patch=$1
     if git -C "$mesa" apply --check "$patch" 2>/dev/null; then
         git -C "$mesa" apply "$patch"
     else
         git -C "$mesa" apply --reverse --check "$patch"
     fi
-done
+}
+apply_local_patch "$root/patches/alpha02-push-descriptor-slots.patch"
+alpha04="$root/patches/alpha04-mtk-native-buffer-layout.patch"
+if ! git -C "$mesa" apply --reverse --check "$alpha04" 2>/dev/null; then
+    for patch in "$root"/patches/alpha03-*.patch; do
+        apply_local_patch "$patch"
+    done
+    apply_local_patch "$alpha04"
+fi
 
 common=(-Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost
         -Dpanfrost-kmds=kbase -Dglx=disabled -Degl=disabled -Dgbm=disabled

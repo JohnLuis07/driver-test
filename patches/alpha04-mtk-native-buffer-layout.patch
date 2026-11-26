@@ -1,0 +1,512 @@
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -51,6 +51,8 @@
+ #include <vndk/hardware_buffer.h>
+ #endif
+ 
++#include <fcntl.h>
++#include <stdatomic.h>
+ #include <unistd.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
+@@ -146,17 +148,19 @@
+    VkImageDrmFormatModifierExplicitCreateInfoEXT *out,
+    VkSubresourceLayout *out_layouts, int max_planes, int *plane_fd)
+ {
+-   struct u_gralloc_buffer_basic_info info;
++   struct u_gralloc_buffer_basic_info info = {0};
+    struct u_gralloc *u_gralloc = vk_android_get_ugralloc();
+-   assert(u_gralloc);
+-
+-   if (u_gralloc_get_buffer_basic_info(u_gralloc, in_hnd, &info) != 0) {
+-      mesa_loge("u_gralloc_get_buffer_basic_info failed");
++   int status = u_gralloc ?
++      u_gralloc_get_buffer_basic_info(u_gralloc, in_hnd, &info) : -ENODEV;
++   if (status != 0) {
++      mesa_logw("[PANVK-GRALLOC] %s mapper result=%d vkresult=%d",
++                __func__, status, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+    if (info.num_planes <= 0 || info.num_planes > max_planes) {
+-      mesa_loge("info.num_planes(%u) > max_planes(%u) unsupported",
++      mesa_loge("[PANVK-GRALLOC] %s unsupported plane count %d (maximum %d)",
++                __func__,
+                 info.num_planes, max_planes);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+@@ -165,7 +169,7 @@
+    for (size_t i = 1; i < info.num_planes; i++) {
+       if (info.offsets[i] == 0) {
+          is_disjoint = true;
+-         mesa_loge("disjoint planes (info.offsets[%zu] == 0) unsupported", i);
++         mesa_loge("[PANVK-GRALLOC] %s disjoint plane=%zu offset=0", __func__, i);
+          break;
+       }
+    }
+@@ -177,8 +181,11 @@
+ 
+    if (plane_fd) {
+       for (int i = 0; i < info.num_planes; i++) {
+-         if (info.fds[i] < 0 || info.fds[i] != info.fds[0])
++         if (info.fds[i] < 0 || info.fds[i] != info.fds[0]) {
++            mesa_loge("[PANVK-GRALLOC] %s invalid or disjoint plane=%d fd=%d",
++                      __func__, i, info.fds[i]);
+             return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++         }
+       }
+       *plane_fd = info.fds[0];
+    }
+@@ -224,8 +231,11 @@
+                                 struct vk_image *image, int dma_buf_fd,
+                                 const VkAllocationCallbacks *alloc)
+ {
+-   if (dma_buf_fd < 0)
++   if (dma_buf_fd < 0 || fcntl(dma_buf_fd, F_GETFD) < 0) {
++      mesa_loge("[PANVK-DMABUF] %s invalid fd=%d vkresult=%d",
++                __func__, dma_buf_fd, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
+ 
+    /* Query image memory requirements for size and supported memory types */
+    VkMemoryRequirements mem_reqs;
+@@ -239,22 +249,36 @@
+       (VkDevice)device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+       dma_buf_fd, &fd_props);
+    if (result != VK_SUCCESS) {
+-      mesa_loge("GetMemoryFdPropertiesKHR failed");
++      mesa_loge("[PANVK-DMABUF] %s GetMemoryFdPropertiesKHR fd=%d vkresult=%d",
++                __func__, dma_buf_fd, result);
+       return result;
+    }
+ 
+    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
+    if (!compatible_types) {
+-      mesa_loge("No compatible AHB mem types (img_reqs=%#b,fd_reqs=%#b)",
+-                 mem_reqs.memoryTypeBits, fd_props.memoryTypeBits);
++      mesa_loge("[PANVK-IMPORT] %s incompatible types (image=0x%x fd=0x%x) vkresult=%d",
++                __func__, mem_reqs.memoryTypeBits, fd_props.memoryTypeBits,
++                VK_ERROR_INVALID_EXTERNAL_HANDLE);
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+    int dup_fd = os_dupfd_cloexec(dma_buf_fd);
+    if (dup_fd < 0) {
+-      mesa_loge("os_dupfd_cloexec(%d) failed: %s", dma_buf_fd, strerror(errno));
++      mesa_loge("[PANVK-DMABUF] %s dup fd=%d failed: %s",
++                __func__, dma_buf_fd, strerror(errno));
+       return (errno == EMFILE) ? VK_ERROR_TOO_MANY_OBJECTS
+                                : VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++
++   const off_t backing_size = lseek(dup_fd, 0, SEEK_END);
++   if (backing_size >= 0)
++      lseek(dup_fd, 0, SEEK_SET);
++   if (backing_size >= 0 && (uint64_t)backing_size < mem_reqs.size) {
++      close(dup_fd);
++      mesa_loge("[PANVK-DMABUF] %s backing=%lld too small for reqSize=%llu vkresult=%d",
++                __func__, (long long)backing_size,
++                (unsigned long long)mem_reqs.size, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+ 
+    const VkMemoryDedicatedAllocateInfo ded_alloc = {
+@@ -277,6 +301,10 @@
+    };
+    result = device->dispatch_table.AllocateMemory(
+       (VkDevice)device, &alloc_info, alloc, &image->anb_memory);
++   mesa_logi("[PANVK-IMPORT] %s AllocateMemory fd=%d type=%u reqSize=%llu alignment=%llu imageTypes=0x%x fdTypes=0x%x vkresult=%d",
++             __func__, dma_buf_fd, alloc_info.memoryTypeIndex,
++             (unsigned long long)mem_reqs.size, (unsigned long long)mem_reqs.alignment,
++             mem_reqs.memoryTypeBits, fd_props.memoryTypeBits, result);
+    if (result != VK_SUCCESS) {
+       close(dup_fd);
+       return result;
+@@ -322,6 +350,78 @@
+    return device->dispatch_table.BindImageMemory2((VkDevice)device, 1, &bind_info);
+ }
+ 
++static bool
++vk_android_mtk_linear_layout(const VkImageCreateInfo *create,
++                              const VkNativeBufferANDROID *anb,
++                              VkSubresourceLayout *layout, int *plane_fd)
++{
++   const native_handle_t *handle = anb->handle;
++   if (handle->numFds != 3 || handle->numInts < 45 ||
++       handle->data[21] != 0x03141592 || create->arrayLayers != 1 ||
++       create->flags & VK_IMAGE_CREATE_PROTECTED_BIT ||
++       (create->format != VK_FORMAT_R8G8B8A8_UNORM &&
++        create->format != VK_FORMAT_R8G8B8A8_SRGB &&
++        create->format != VK_FORMAT_B8G8R8A8_UNORM &&
++        create->format != VK_FORMAT_B8G8R8A8_SRGB) ||
++       ((create->format == VK_FORMAT_B8G8R8A8_UNORM ||
++         create->format == VK_FORMAT_B8G8R8A8_SRGB) ?
++        anb->format != HAL_PIXEL_FORMAT_BGRA_8888 :
++        (anb->format != HAL_PIXEL_FORMAT_RGBA_8888 &&
++         anb->format != HAL_PIXEL_FORMAT_RGBX_8888)))
++      return false;
++
++   const uint32_t width = create->extent.width, height = create->extent.height;
++   if (!width || !height || anb->stride <= 0)
++      return false;
++
++   const int *data = &handle->data[21];
++   const struct {
++      unsigned dimensions, plane;
++   } candidates[] = {{2, 21}, {1, 16}};
++   uint64_t pitch = 0, size = 0;
++   unsigned matched = 0;
++   for (unsigned i = 0; i < ARRAY_SIZE(candidates); i++) {
++      const unsigned d = candidates[i].dimensions, p = candidates[i].plane;
++      const uint32_t alloc_format = data[p - 5];
++      if (data[d] != width || data[d + 1] != height ||
++          data[d + 2] != anb->format || data[p - 4] != 0 ||
++          (alloc_format != (uint32_t)anb->format && (i != 1 || alloc_format != 0)) ||
++          data[p] <= 0 || data[p + 1] < width || data[p + 2] < height ||
++          data[p + 3] != 0 || (uint64_t)data[p] != (uint64_t)anb->stride * 4 ||
++          (uint64_t)data[p] < (uint64_t)data[p + 1] * 4)
++         continue;
++      pitch = data[p];
++      size = pitch * (uint32_t)data[p + 2];
++      matched++;
++   }
++   if (matched != 1)
++      return false;
++
++   int selected = -1;
++   for (int i = 0; i < handle->numFds; i++) {
++      const int fd = handle->data[i];
++      const bool valid = fd >= 0 && fcntl(fd, F_GETFD) >= 0;
++      const off_t fd_size = valid ? lseek(fd, 0, SEEK_END) : -1;
++      if (fd_size >= 0)
++         lseek(fd, 0, SEEK_SET);
++      mesa_logi("[PANVK-DMABUF] %s fdIndex=%d fd=%d valid=%d size=%lld minimum=%llu",
++                __func__, i, fd, valid, (long long)fd_size, (unsigned long long)size);
++      if (fd_size <= 0 || (uint64_t)fd_size < size)
++         continue;
++      if (selected >= 0)
++         return false;
++      selected = i;
++   }
++   if (selected < 0)
++      return false;
++
++   *plane_fd = handle->data[selected];
++   *layout = (VkSubresourceLayout){.offset = 0, .rowPitch = pitch};
++   mesa_logi("[PANVK-GRALLOC] %s recognized MTK linear layout fdIndex=%d pitch=%llu",
++             __func__, selected, (unsigned long long)pitch);
++   return true;
++}
++
+ VkResult
+ vk_android_get_anb_layout_fd(
+    const VkImageCreateInfo *pCreateInfo,
+@@ -331,14 +431,59 @@
+    const VkNativeBufferANDROID *native_buffer =
+       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
+ 
++   if (!native_buffer || !native_buffer->handle ||
++       native_buffer->handle->numFds <= 0 ||
++       native_buffer->handle->numFds > 16 ||
++       native_buffer->handle->numInts < 0)
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++
++   const native_handle_t *handle = native_buffer->handle;
++   mesa_logi("[PANVK-WSI] %s ANB %ux%u vkFormat=%d halFormat=%d stride=%d fds=%d ints=%d",
++             __func__, pCreateInfo->extent.width, pCreateInfo->extent.height,
++             pCreateInfo->format, native_buffer->format, native_buffer->stride,
++             handle->numFds, handle->numInts);
++
+    struct u_gralloc_buffer_handle gr_handle = {
+       .handle = native_buffer->handle,
+       .hal_format = native_buffer->format,
+       .pixel_stride = native_buffer->stride,
+    };
+ 
+-   return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
+-                                            out_layouts, max_planes, plane_fd);
++   VkResult result = vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
++                                                       out_layouts, max_planes, plane_fd);
++   if (result == VK_ERROR_INVALID_EXTERNAL_HANDLE && plane_fd && max_planes > 0 &&
++       vk_android_mtk_linear_layout(pCreateInfo, native_buffer, out_layouts, plane_fd)) {
++      *out = (VkImageDrmFormatModifierExplicitCreateInfoEXT){
++         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
++         .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
++         .drmFormatModifierPlaneCount = 1,
++         .pPlaneLayouts = out_layouts,
++      };
++      result = VK_SUCCESS;
++   }
++
++   if (result != VK_SUCCESS) {
++      mesa_loge("[PANVK-GRALLOC] %s layout rejected vkresult=%d", __func__, result);
++      return result;
++   }
++   int fd_index = -1;
++   if (plane_fd) {
++      for (int i = 0; i < handle->numFds; i++) {
++         if (handle->data[i] == *plane_fd) {
++            fd_index = i;
++            break;
++         }
++      }
++   }
++   mesa_logi("[PANVK-IMPORT] %s fdIndex=%d fdValid=%d planes=%u modifier=0x%llx",
++             __func__, fd_index, plane_fd && fcntl(*plane_fd, F_GETFD) >= 0,
++             out->drmFormatModifierPlaneCount, (unsigned long long)out->drmFormatModifier);
++   for (uint32_t i = 0; i < out->drmFormatModifierPlaneCount; i++) {
++      mesa_logi("[PANVK-GRALLOC] plane=%u stride=%llu offset=%llu",
++                i, (unsigned long long)out_layouts[i].rowPitch,
++                (unsigned long long)out_layouts[i].offset);
++   }
++   return result;
+ }
+ 
+ VkResult
+@@ -496,6 +641,13 @@
+    return setup_gralloc0_usage(format, imageUsage, grallocUsage);
+ }
+ 
++
++static bool
++vk_android_log_first(atomic_uint *counter)
++{
++   return atomic_load_explicit(counter, memory_order_relaxed) < 4 &&
++          atomic_fetch_add_explicit(counter, 1, memory_order_relaxed) < 4;
++}
+ 
+ VKAPI_ATTR VkResult VKAPI_CALL
+ vk_common_AcquireImageANDROID(VkDevice _device,
+@@ -572,6 +724,11 @@
+    if (fence_fd >= 0)
+       close(fence_fd);
+ 
++   static atomic_uint logged;
++   if (result != VK_SUCCESS || vk_android_log_first(&logged))
++      mesa_logi("[PANVK-PRESENT] %s inputFence=%d semaphore=%d fence=%d vkresult=%d",
++                __func__, nativeFenceFd, semaphore != VK_NULL_HANDLE,
++                fence != VK_NULL_HANDLE, result);
+    return result;
+ }
+ 
+@@ -644,16 +801,25 @@
+                                                    VK_NULL_HANDLE);
+    }
+    STACK_ARRAY_FINISH(wait_infos);
+-   if (result != VK_SUCCESS)
++   if (result != VK_SUCCESS) {
++      mesa_loge("[PANVK-PRESENT] %s submit waits=%u vkresult=%d",
++                __func__, waitSemaphoreCount, result);
+       return result;
++   }
+ 
+    const VkSemaphoreGetFdInfoKHR get_fd = {
+       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+       .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+       .semaphore = queue->anb_semaphore,
+    };
+-   return device->dispatch_table.GetSemaphoreFdKHR(vk_device_to_handle(device),
+-                                                   &get_fd, pNativeFenceFd);
++   result = device->dispatch_table.GetSemaphoreFdKHR(vk_device_to_handle(device),
++                                                      &get_fd, pNativeFenceFd);
++   static atomic_uint logged;
++   if (result != VK_SUCCESS || vk_android_log_first(&logged))
++      mesa_logi("[PANVK-PRESENT] %s waits=%u submit=0 releaseFence=%d export=%d",
++                __func__, waitSemaphoreCount,
++                result == VK_SUCCESS ? *pNativeFenceFd : -1, result);
++   return result;
+ }
+ 
+ #if ANDROID_API_LEVEL >= 26
+--- a/src/panfrost/vulkan/panvk_android.c
++++ b/src/panfrost/vulkan/panvk_android.c
+@@ -9,15 +9,67 @@
+ #include "panvk_android.h"
+ 
+ #include "panvk_device.h"
++#include "panvk_entrypoints.h"
+ #include "panvk_image.h"
++#include "panvk_physical_device.h"
++#include "hardware/gralloc.h"
++#include "util/log.h"
+ 
+ #include "vndk/hardware_buffer.h"
+ #include "vulkan/vk_android_native_buffer.h"
+ 
+ #include "vk_alloc.h"
+ #include "vk_android.h"
++#include "vk_common_entrypoints.h"
+ #include "vk_device_memory.h"
+ #include "vk_util.h"
++
++static bool
++panvk_android_prefer_linear_swapchain(VkDevice device, VkFormat format)
++{
++   VK_FROM_HANDLE(panvk_device, dev, device);
++   const struct panvk_physical_device *physical =
++      to_panvk_physical_device(dev->vk.physical);
++   return physical->kbase_node_path[0] &&
++          (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB ||
++           format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB);
++}
++
++#define PANVK_MALI_GRALLOC_USAGE_NO_AFBC (1u << 29)
++
++VKAPI_ATTR VkResult VKAPI_CALL
++panvk_GetSwapchainGrallocUsageANDROID(VkDevice device, VkFormat format,
++                                      VkImageUsageFlags image_usage, int *usage)
++{
++   VkResult result =
++      vk_common_GetSwapchainGrallocUsageANDROID(device, format, image_usage, usage);
++   if (result == VK_SUCCESS && panvk_android_prefer_linear_swapchain(device, format))
++      *usage |= PANVK_MALI_GRALLOC_USAGE_NO_AFBC | GRALLOC_USAGE_HW_COMPOSER;
++
++   mesa_logi("[PANVK-WSI] %s format=%d usage=0x%x vkresult=%d",
++             __func__, format, result == VK_SUCCESS ? *usage : 0, result);
++   return result;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL
++panvk_GetSwapchainGrallocUsage2ANDROID(VkDevice device, VkFormat format,
++                                       VkImageUsageFlags image_usage,
++                                       VkSwapchainImageUsageFlagsANDROID swap_usage,
++                                       uint64_t *consumer, uint64_t *producer)
++{
++   VkResult result = vk_common_GetSwapchainGrallocUsage2ANDROID(
++      device, format, image_usage, swap_usage, consumer, producer);
++   if (result == VK_SUCCESS && panvk_android_prefer_linear_swapchain(device, format) &&
++       !(swap_usage & VK_SWAPCHAIN_IMAGE_USAGE_SHARED_BIT_ANDROID)) {
++      *consumer |= GRALLOC_USAGE_HW_COMPOSER;
++      *producer |= PANVK_MALI_GRALLOC_USAGE_NO_AFBC;
++   }
++
++   mesa_logi("[PANVK-WSI] %s format=%d consumer=0x%llx producer=0x%llx vkresult=%d",
++             __func__, format, result == VK_SUCCESS ? (unsigned long long)*consumer : 0,
++             result == VK_SUCCESS ? (unsigned long long)*producer : 0, result);
++   return result;
++}
+ 
+ bool
+ panvk_android_is_gralloc_image(const VkImageCreateInfo *pCreateInfo)
+@@ -136,7 +188,9 @@
+ 
+    VkImageCreateInfo local_create = *create_info;
+    local_create.pNext = &external_info;
+-   return panvk_image_init(img, &local_create);
++   result = panvk_image_init(img, &local_create);
++   mesa_logi("[PANVK-IMPORT] %s panvk_image_init vkresult=%d", __func__, result);
++   return result;
+ }
+ 
+ VkResult
+@@ -186,6 +240,7 @@
+          .memory = img->vk.anb_memory,
+       };
+       result = dev->vk.dispatch_table.BindImageMemory2(device, 1, &bind_info);
++      mesa_logi("[PANVK-IMPORT] %s BindImageMemory2 vkresult=%d", __func__, result);
+    }
+    if (result != VK_SUCCESS) {
+       dev->vk.dispatch_table.DestroyImage(device, img_handle, pAllocator);
+@@ -206,8 +261,6 @@
+    VkImageCreateInfo *create_info = img->vk.android_deferred_create_info;
+    VkResult result;
+ 
+-   assert(create_info);
+-
+    const VkNativeBufferANDROID *anb =
+       vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
+ 
+@@ -215,6 +268,12 @@
+     * Android helper vk_android_get_anb_layout, which could be refactored to
+     * take ANB directly instead.
+     */
++   if (!create_info || !anb) {
++      mesa_loge("[PANVK-IMPORT] %s missing deferred image or ANB vkresult=%d",
++                __func__, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
++   }
++
+    VkNativeBufferANDROID local_anb = *anb;
+    local_anb.pNext = create_info->pNext;
+    VkImageCreateInfo local_create = *create_info;
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -235,7 +235,7 @@
+       chain->next_image = (idx + 1) % swapchain->image_count;
+       if (chain->acquired_count < swapchain->image_count) {
+          chain->acquired_count++;
+-         mesa_logi("panvk: Android acquired image %u", idx);
++         mesa_logi("[PANVK-WSI] Android acquired image %u", idx);
+       }
+       return VK_SUCCESS;
+    }
+@@ -284,7 +284,7 @@
+                                         &swapchain->fences[image_index],
+                                         VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS) {
+-      mesa_loge("panvk: Android present image %u GPU copy fence failed (%d)",
++      mesa_loge("[PANVK-PRESENT] Android present image %u GPU copy fence failed (%d)",
+                 image_index, result);
+       return result;
+    }
+@@ -300,7 +300,7 @@
+    ANativeWindow_Buffer window;
+    int status = ANativeWindow_lock(chain->window, &window, NULL);
+    if (status != 0) {
+-      mesa_loge("panvk: Android present window lock failed (%d)", status);
++      mesa_loge("[PANVK-PRESENT] Android present window lock failed (%d)", status);
+       return VK_ERROR_SURFACE_LOST_KHR;
+    }
+ 
+@@ -329,7 +329,7 @@
+    }
+    status = ANativeWindow_unlockAndPost(chain->window);
+    if (!valid || status != 0) {
+-      mesa_loge("panvk: Android present window copy/post failed (layout=%d, post=%d)",
++      mesa_loge("[PANVK-PRESENT] Android present window copy/post failed (layout=%d, post=%d)",
+                 valid, status);
+       return status ? VK_ERROR_SURFACE_LOST_KHR : VK_ERROR_OUT_OF_DATE_KHR;
+    }
+@@ -341,7 +341,7 @@
+          for (uint32_t x = 0; x < width; x++, row += 4)
+             nonblack += (row[0] | row[1] | row[2]) != 0;
+       }
+-      mesa_logi("panvk: Android present %u image=%u format=%d %ux%u fence=ready nonblack=%u post=0",
++      mesa_logi("[PANVK-PRESENT] Android present %u image=%u format=%d %ux%u fence=ready nonblack=%u post=0",
+                 ++chain->presented_count, image_index, chain->format,
+                 width, height, nonblack);
+    }
+@@ -394,7 +394,7 @@
+    VkResult result = wsi_swapchain_init(wsi_device, &chain->base, device,
+                                         pCreateInfo, &params.base, pAllocator);
+    if (result != VK_SUCCESS) {
+-      mesa_loge("panvk: Android CPU swapchain initialization failed (%d)", result);
++      mesa_loge("[PANVK-WSI] Android CPU swapchain initialization failed (%d)", result);
+       vk_free2(&dev->alloc, pAllocator, chain);
+       return result;
+    }
+@@ -420,7 +420,7 @@
+                                                    chain->opaque ? WINDOW_FORMAT_RGBX_8888 :
+                                                                    WINDOW_FORMAT_RGBA_8888);
+    if (status != 0) {
+-      mesa_loge("panvk: Android swapchain window geometry failed (%d)", status);
++      mesa_loge("[PANVK-WSI] Android swapchain window geometry failed (%d)", status);
+       result = VK_ERROR_SURFACE_LOST_KHR;
+       goto fail;
+    }
+@@ -429,13 +429,13 @@
+    for (uint32_t i = 0; i < count; i++) {
+       result = wsi_create_image(&chain->base, &chain->base.image_info, &chain->images[i]);
+       if (result != VK_SUCCESS) {
+-         mesa_loge("panvk: Android CPU swapchain image %u creation failed (%d)", i, result);
++         mesa_loge("[PANVK-WSI] Android CPU swapchain image %u creation failed (%d)", i, result);
+          goto fail;
+       }
+       chain->base.image_count++;
+    }
+ 
+-   mesa_logi("panvk: Android CPU swapchain created %ux%u format=%d images=%u",
++   mesa_logi("[PANVK-WSI] Android CPU swapchain created %ux%u format=%d images=%u",
+              chain->extent.width, chain->extent.height, chain->format, count);
+    *swapchain_out = &chain->base;
+    return VK_SUCCESS;

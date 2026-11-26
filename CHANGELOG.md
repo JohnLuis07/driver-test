@@ -1,5 +1,11 @@
 # Changelog
 
+## G615 Alpha 04
+
+- Added kbase swapchain usage negotiation for uncompressed 32-bit Android buffers.
+- Added validation of documented MediaTek single-plane linear handles when gralloc mapper metadata is unavailable.
+- Added import backing-size checks and labeled runtime diagnostics from allocation through presentation.
+
 ## G615 Alpha 03
 
 - Reused Mesa CPU WSI staging for Android ICD swapchain presentation and report window lock, layout, fence and post errors.
