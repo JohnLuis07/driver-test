@@ -1,0 +1,54 @@
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -57,6 +57,7 @@
+ #include "panvk_image.h"
+ #include "vk_object.h"
+ #include "vk_android.h"
++#include "util/log.h"
+ 
+ struct panvk_android_swapchain_image {
+    struct wsi_image base;
+@@ -374,7 +375,10 @@
+                   AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                   AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+       };
+-      if (AHardwareBuffer_allocate(&desc, &chain->images[i].ahb) != 0 || !chain->images[i].ahb) {
++      int ahb_result = AHardwareBuffer_allocate(&desc, &chain->images[i].ahb);
++      if (ahb_result != 0 || !chain->images[i].ahb) {
++         mesa_loge("panvk: swapchain image %u AHardwareBuffer_allocate failed (%d)",
++                   i, ahb_result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return VK_ERROR_INITIALIZATION_FAILED;
+       }
+@@ -401,6 +405,7 @@
+       };
+       result = dev->dispatch_table.CreateImage(device, &ici, pAllocator, &chain->images[i].base.image);
+       if (result != VK_SUCCESS) {
++         mesa_loge("panvk: swapchain image %u CreateImage failed (%d)", i, result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -410,6 +415,7 @@
+       };
+       result = panvk_GetAndroidHardwareBufferPropertiesANDROID(device, chain->images[i].ahb, &ahb_props);
+       if (result != VK_SUCCESS) {
++         mesa_loge("panvk: swapchain image %u GetAndroidHardwareBufferProperties failed (%d)", i, result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -439,6 +445,7 @@
+       };
+       result = dev->dispatch_table.AllocateMemory(device, &mai, pAllocator, &chain->images[i].base.memory);
+       if (result != VK_SUCCESS) {
++         mesa_loge("panvk: swapchain image %u AllocateMemory failed (%d)", i, result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }
+@@ -451,6 +458,7 @@
+       };
+       result = dev->dispatch_table.BindImageMemory2(device, 1, &bmi);
+       if (result != VK_SUCCESS) {
++         mesa_loge("panvk: swapchain image %u BindImageMemory2 failed (%d)", i, result);
+          panvk_android_swapchain_destroy(&chain->base, pAllocator);
+          return result;
+       }

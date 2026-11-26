@@ -8,6 +8,14 @@ kbase="$root/build/kbase"
 ndk="$root/build/android-ndk-$NDK_RELEASE/toolchains/llvm/prebuilt/linux-x86_64"
 host="$root/build/host"
 target="$root/build/android"
+debug=false
+if [[ ${1:-} == --diagnostic && $# == 1 ]]; then
+    target="${PANVK_DIAGNOSTIC_BUILDDIR:-$root/build/android-diagnostic}"
+    debug=true
+elif [[ $# != 0 ]]; then
+    echo "Usage: $0 [--diagnostic]" >&2
+    exit 2
+fi
 jobs=${JOBS:-$(nproc)}
 export PATH="$root/build/venv/bin:/usr/lib/llvm-18/bin:$PATH"
 export LC_ALL=C TZ=UTC
@@ -23,6 +31,13 @@ if [[ ! -f build/patch.complete ]]; then
     "$kbase/scripts/apply-patches.sh" --profile "$PROFILE" --mesa "$mesa" > build/patch.log 2>&1
     touch build/patch.complete
 fi
+for patch in "$root"/patches/alpha02-*.patch; do
+    if git -C "$mesa" apply --check "$patch" 2>/dev/null; then
+        git -C "$mesa" apply "$patch"
+    else
+        git -C "$mesa" apply --reverse --check "$patch"
+    fi
+done
 
 common=(-Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost
         -Dpanfrost-kmds=kbase -Dglx=disabled -Degl=disabled -Dgbm=disabled
@@ -62,7 +77,7 @@ pkg_config_libdir = ['$root/build/android-pc']
 CROSS
 if [[ ! -f $target/build.ninja ]]; then
     PKG_CONFIG_PATH= meson setup "$target" "$mesa" --cross-file build/android.ini \
-        --wrap-mode=nodownload "${common[@]}" -Dplatforms=android \
+        --wrap-mode=nodownload "${common[@]}" -Ddebug="$debug" -Dplatforms=android \
         -Dallow-fallback-for=libdrm -Dlibdrm:default_library=static \
         -Dlibdrm:auto_features=disabled -Dlibdrm:tests=false \
         -Dandroid-stub=true -Dandroid-strict=false -Dllvm=disabled \

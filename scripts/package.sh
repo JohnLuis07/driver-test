@@ -3,23 +3,31 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/versions.sh
 export LC_ALL=C TZ=UTC
-base=PanVK-G615-Alpha01
+base=PanVK-G615-Alpha02
+target=build/android
+if [[ ${1:-} == --diagnostic && $# == 1 ]]; then
+    base=PanVK-G615-Alpha02-Diagnostic
+    target="${PANVK_DIAGNOSTIC_BUILDDIR:-build/android-diagnostic}"
+elif [[ $# != 0 ]]; then
+    echo "Usage: $0 [--diagnostic]" >&2
+    exit 2
+fi
 lib=libvulkan_panfrost.so
 ndk="build/android-ndk-$NDK_RELEASE"
 bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-so="build/android/src/panfrost/vulkan/$lib"
+so="$target/src/panfrost/vulkan/$lib"
 test -s "$so"
 mkdir -p build/package dist
 stage=$(mktemp -d build/package/stage.XXXXXX)
 trap 'find "$stage" -depth -delete' EXIT
 mkdir "$stage/install"
-DESTDIR="$PWD/$stage/install" build/venv/bin/meson install -C build/android --no-rebuild
+DESTDIR="$PWD/$stage/install" build/venv/bin/meson install -C "$target" --no-rebuild
 installed=$(find "$stage/install" -name "$lib" -print -quit)
 test -s "$installed"
 "$bin/llvm-strip" --strip-unneeded -o "$stage/$lib" "$installed"
 build/kbase/scripts/validate-binary.sh --abi android "$stage/$lib"
 
-python3 -I - "$stage" "$ANDROID_API" "$MESA_COMMIT" "$KBASE_COMMIT" <<'PY'
+python3 -I - "$stage" "$ANDROID_API" "$MESA_COMMIT" "$KBASE_COMMIT" "$base" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -29,7 +37,7 @@ import subprocess
 import sys
 import zipfile
 
-stage, api, mesa, kbase = sys.argv[1:]
+stage, api, mesa, kbase, base = sys.argv[1:]
 stage = Path(stage)
 library = "libvulkan_panfrost.so"
 so = stage / library
@@ -67,10 +75,10 @@ assert "GLIBC_" not in readelf("--version-info")
 
 meta = {
     "schemaVersion": 1,
-    "name": "PanVK G615 Alpha 01",
-    "description": "Independent Android arm64 Mesa PanVK baseline for Mali-G615 (kbase CSF).",
+    "name": "PanVK G615 Alpha 02",
+    "description": "Android arm64 PanVK stability build with push-descriptor bounds fixes.",
     "author": "Mesa and zenithblue-oss contributors",
-    "packageVersion": "Alpha01",
+    "packageVersion": "Alpha02",
     "vendor": "Mesa",
     "driverVersion": "26.3.0-devel",
     "minApi": int(api),
@@ -79,8 +87,17 @@ meta = {
 manifest = {
     "mesaCommit": mesa, "kbasePatchCommit": kbase,
     "sha256": hashlib.sha256(data).hexdigest(), "buildId": build_id,
+    "localPatchSha256": {
+        patch.name: hashlib.sha256(patch.read_bytes()).hexdigest()
+        for patch in sorted(Path("patches").glob("alpha02-*.patch"))
+    },
     "needed": sorted(needed), "exports": sorted(required),
 }
+if base.endswith("-Diagnostic"):
+    meta["name"] += " Diagnostic"
+    meta["packageVersion"] += "-Diagnostic"
+    meta["description"] = "Alpha 02 stability build with separately retained debug symbols."
+
 with zipfile.ZipFile(stage / "driver.zip", "w", zipfile.ZIP_DEFLATED) as out:
     for name, contents in {
         library: data,
@@ -97,6 +114,25 @@ with zipfile.ZipFile(stage / "driver.zip") as archive:
 (stage / "BUILD-INFO.json").write_text(json.dumps(manifest, indent=2) + "\n")
 print(json.dumps(manifest, indent=2))
 PY
+
+if [[ $base == *-Diagnostic ]]; then
+    "$bin/llvm-objcopy" --only-keep-debug "$installed" "$stage/$lib.debug"
+    readelf -SW "$stage/$lib.debug" > "$stage/sections.txt"
+    grep -q '\.debug_line' "$stage/sections.txt"
+    debug_id=$(readelf -nW "$stage/$lib.debug" | awk '/Build ID:/ {print $3}')
+    packaged_id=$(readelf -nW "$stage/$lib" | awk '/Build ID:/ {print $3}')
+    [[ -n $debug_id && $debug_id == "$packaged_id" ]]
+    gzip -n "$stage/$lib.debug"
+    mv "$stage/$lib.debug.gz" "dist/$base.so.debug.gz"
+    mv "$stage/driver.zip" "dist/$base.adpkg.zip"
+    mv "$stage/BUILD-INFO.json" "dist/$base.build.json"
+    (
+        cd dist
+        sha256sum "$base".{adpkg.zip,build.json,so.debug.gz} > "$base.SHA256SUMS"
+        sha256sum -c "$base.SHA256SUMS"
+    )
+    exit
+fi
 
 # Preserve per-file copyright and license notices in the exact patched source.
 epoch=$(git -C build/mesa show -s --format=%ct "$MESA_COMMIT")
@@ -126,4 +162,4 @@ for pair in "driver.zip:$base.adpkg.zip" "BUILD-INFO.json:$base.build.json" \
     "patched-mesa.tar.gz:$base.source.tar.gz" "notices.tar.gz:$base.notices.tar.gz"; do
     mv "$stage/${pair%%:*}" "dist/${pair#*:}"
 done
-(cd dist && sha256sum "$base".{adpkg.zip,build.json,source.tar.gz,notices.tar.gz} > SHA256SUMS && sha256sum -c SHA256SUMS)
+(cd dist && sha256sum "$base".{adpkg.zip,build.json,source.tar.gz,notices.tar.gz} > "$base.SHA256SUMS" && sha256sum -c "$base.SHA256SUMS")
