@@ -1,5 +1,11 @@
 # Changelog
 
+## G615 Alpha 05
+
+- Added the kbase swapchain allocation preference to Android 16's primary AHB usage query.
+- Resolved single-plane mapper backing FDs by validated allocation size and recorded mapper layer and allocation metadata.
+- Added HAL route, swapchain request, and kbase import diagnostics. Device validation is pending.
+
 ## G615 Alpha 04
 
 - Added kbase swapchain usage negotiation for uncompressed 32-bit Android buffers.

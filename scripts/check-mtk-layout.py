@@ -7,10 +7,14 @@ root = Path(__file__).resolve().parent.parent
 source = (root / "build/mesa/src/vulkan/runtime/vk_android.c").read_text()
 begin = source.index("static bool\nvk_android_mtk_linear_layout(")
 end = source.index("\nVkResult\nvk_android_get_anb_layout_fd(", begin)
+mapper = (root / "build/mesa/src/util/u_gralloc/u_gralloc_fallback.c").read_text()
+fd_begin = mapper.index("static int\npanvk_v19_find_plane_fd(")
+fd_end = mapper.index("\nstatic int\npanvk_v19_decode_planes(", fd_begin)
 harness = r"""
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +23,8 @@ harness = r"""
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define mesa_logi(...) ((void)0)
+#define mesa_logw(...) ((void)0)
+#define MAX2(a, b) ((a) > (b) ? (a) : (b))
 #define HAL_PIXEL_FORMAT_RGBA_8888 1
 #define HAL_PIXEL_FORMAT_RGBX_8888 2
 #define HAL_PIXEL_FORMAT_BGRA_8888 5
@@ -87,15 +93,25 @@ int main(void)
    fields[12] = 0x0c410000;
    assert(!vk_android_mtk_linear_layout(&create, &anb, &layout, &selected));
 
+   assert(panvk_v19_find_plane_fd(&handle, 32768, 32000) == 1);
+   handle.data[2] = make_fd(65536);
+   assert(panvk_v19_find_plane_fd(&handle, 32768, 32000) == 1);
+   assert(ftruncate(handle.data[0], 32768) == 0);
+   assert(panvk_v19_find_plane_fd(&handle, 32768, 32000) < 0);
+   assert(ftruncate(handle.data[0], 65536) == 0);
+   assert(panvk_v19_find_plane_fd(&handle, 49152, 49000) < 0);
    close(handle.data[0]);
+   assert(panvk_v19_find_plane_fd(&handle, 49152, 49000) == 2);
+   assert(panvk_v19_find_plane_fd(&handle, 65536, 65537) < 0);
    close(handle.data[1]);
-   puts("MTK native-buffer layout fixture checks passed");
+   close(handle.data[2]);
+   puts("MTK layout and mapper FD fixtures passed");
 }
 """
 with tempfile.TemporaryDirectory(prefix="panvk-mtk-layout-") as temp:
     test = Path(temp) / "layout.c"
     exe = Path(temp) / "layout"
-    test.write_text(harness + source[begin:end] + tests)
+    test.write_text(harness + source[begin:end] + mapper[fd_begin:fd_end] + tests)
     subprocess.run(
         ["cc", "-std=c11", "-O2", "-I", str(root / "build/mesa/include"),
          str(test), "-o", str(exe)],

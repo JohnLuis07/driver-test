@@ -40,12 +40,16 @@ apply_local_patch() {
     fi
 }
 apply_local_patch "$root/patches/alpha02-push-descriptor-slots.patch"
-alpha04="$root/patches/alpha04-mtk-native-buffer-layout.patch"
-if ! git -C "$mesa" apply --reverse --check "$alpha04" 2>/dev/null; then
-    for patch in "$root"/patches/alpha03-*.patch; do
-        apply_local_patch "$patch"
-    done
-    apply_local_patch "$alpha04"
+alpha05="$root/patches/alpha05-android16-wsi.patch"
+if ! git -C "$mesa" apply --reverse --check "$alpha05" 2>/dev/null; then
+    alpha04="$root/patches/alpha04-mtk-native-buffer-layout.patch"
+    if ! git -C "$mesa" apply --reverse --check "$alpha04" 2>/dev/null; then
+        for patch in "$root"/patches/alpha03-*.patch; do
+            apply_local_patch "$patch"
+        done
+        apply_local_patch "$alpha04"
+    fi
+    apply_local_patch "$alpha05"
 fi
 
 common=(-Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost

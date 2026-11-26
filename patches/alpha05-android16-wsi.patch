@@ -1,0 +1,309 @@
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -112,6 +112,7 @@
+ vk_android_hal_open(const struct hw_module_t *mod, const char *id,
+                     struct hw_device_t **dev)
+ {
++   mesa_logi("[PANVK-WSI05] driver=Alpha05 route=Android-HAL entry=%s", __func__);
+    assert(mod == &HAL_MODULE_INFO_SYM.common);
+    assert(strcmp(id, HWVULKAN_DEVICE_0) == 0);
+ 
+@@ -301,8 +302,8 @@
+    };
+    result = device->dispatch_table.AllocateMemory(
+       (VkDevice)device, &alloc_info, alloc, &image->anb_memory);
+-   mesa_logi("[PANVK-IMPORT] %s AllocateMemory fd=%d type=%u reqSize=%llu alignment=%llu imageTypes=0x%x fdTypes=0x%x vkresult=%d",
+-             __func__, dma_buf_fd, alloc_info.memoryTypeIndex,
++   mesa_logi("[PANVK-IMPORT] %s AllocateMemory fd=%d handleType=0x%x type=%u reqSize=%llu alignment=%llu imageTypes=0x%x fdTypes=0x%x vkresult=%d",
++             __func__, dma_buf_fd, import_info.handleType, alloc_info.memoryTypeIndex,
+              (unsigned long long)mem_reqs.size, (unsigned long long)mem_reqs.alignment,
+              mem_reqs.memoryTypeBits, fd_props.memoryTypeBits, result);
+    if (result != VK_SUCCESS) {
+@@ -438,10 +439,13 @@
+       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+ 
+    const native_handle_t *handle = native_buffer->handle;
+-   mesa_logi("[PANVK-WSI] %s ANB %ux%u vkFormat=%d halFormat=%d stride=%d fds=%d ints=%d",
++   mesa_logi("[PANVK-WSI] %s ANB %ux%u vkFormat=%d halFormat=%d stride=%d fds=%d ints=%d nativeUsage=0x%x producer=0x%llx consumer=0x%llx imageUsage=0x%x imageFlags=0x%x",
+              __func__, pCreateInfo->extent.width, pCreateInfo->extent.height,
+              pCreateInfo->format, native_buffer->format, native_buffer->stride,
+-             handle->numFds, handle->numInts);
++             handle->numFds, handle->numInts, native_buffer->usage,
++             (unsigned long long)native_buffer->usage2.producer,
++             (unsigned long long)native_buffer->usage2.consumer,
++             pCreateInfo->usage, pCreateInfo->flags);
+ 
+    struct u_gralloc_buffer_handle gr_handle = {
+       .handle = native_buffer->handle,
+@@ -1586,10 +1590,10 @@
+  * the AHB external and usage props filling.
+  */
+ VkResult
+-vk_android_get_ahb_image_properties(
++vk_android_get_ahb_image_properties_with_usage(
+    VkPhysicalDevice pdev_handle,
+    const VkPhysicalDeviceImageFormatInfo2 *info,
+-   VkImageFormatProperties2 *props)
++   VkImageFormatProperties2 *props, uint64_t preferred_usage)
+ {
+    VK_FROM_HANDLE(vk_physical_device, pdevice, pdev_handle);
+    VkExternalImageFormatProperties *external_props;
+@@ -1614,8 +1618,19 @@
+                        "format (%u) unsupported for AHB", info->format);
+    }
+ 
+-   const uint64_t ahb_usage = vk_image_format_info_to_ahb_usage(info);
+-   if (!vk_ahb_probe_format(ahb_format, ahb_usage)) {
++   const uint64_t base_usage = vk_image_format_info_to_ahb_usage(info);
++   uint64_t ahb_usage = base_usage;
++   if (preferred_usage && vk_ahb_probe_format(ahb_format, base_usage | preferred_usage))
++      ahb_usage |= preferred_usage;
++   const bool supported = ahb_usage != base_usage || vk_ahb_probe_format(ahb_format, ahb_usage);
++   if (preferred_usage) {
++      mesa_logi("[PANVK-WSI05] %s vkFormat=%d halFormat=%u imageUsage=0x%x imageFlags=0x%x baseline=0x%llx preferred=0x%llx selected=0x%llx vkresult=%d",
++                __func__, info->format, ahb_format, info->usage, info->flags,
++                (unsigned long long)base_usage, (unsigned long long)preferred_usage,
++                (unsigned long long)ahb_usage,
++                supported ? VK_SUCCESS : VK_ERROR_FORMAT_NOT_SUPPORTED);
++   }
++   if (!supported) {
+       return vk_errorf(pdevice, VK_ERROR_FORMAT_NOT_SUPPORTED,
+                        "ahb_format (%u) ahb_usage (0x%" PRIx64 ") unsupported",
+                        ahb_format, ahb_usage);
+@@ -1644,6 +1659,14 @@
+    return VK_SUCCESS;
+ }
+ 
++VkResult
++vk_android_get_ahb_image_properties(VkPhysicalDevice physical,
++                                    const VkPhysicalDeviceImageFormatInfo2 *info,
++                                    VkImageFormatProperties2 *props)
++{
++   return vk_android_get_ahb_image_properties_with_usage(physical, info, props, 0);
++}
++
+ void
+ vk_android_get_ahb_buffer_properties(
+    VkPhysicalDevice pdev_handle,
+--- a/src/vulkan/runtime/vk_android.h
++++ b/src/vulkan/runtime/vk_android.h
+@@ -131,6 +131,12 @@
+ 
+ void vk_android_set_owned_ahb(const struct AHardwareBuffer *ahb);
+ 
++VkResult vk_android_get_ahb_image_properties_with_usage(
++   VkPhysicalDevice pdev_handle,
++   const VkPhysicalDeviceImageFormatInfo2 *info,
++   VkImageFormatProperties2 *props,
++   uint64_t preferred_usage);
++
+ VkResult vk_android_get_ahb_image_properties(
+    VkPhysicalDevice pdev_handle,
+    const VkPhysicalDeviceImageFormatInfo2 *info,
+--- a/src/panfrost/vulkan/panvk_physical_device.c
++++ b/src/panfrost/vulkan/panvk_physical_device.c
+@@ -12,6 +12,10 @@
+  */
+ 
+ #include <sys/stat.h>
++
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++#include <hardware/gralloc.h>
++#endif
+ 
+ #if defined(HAVE_PAN_KMOD_KBASE)
+ #include <errno.h>
+@@ -2708,8 +2712,22 @@
+ 
+       if (external_info->handleType ==
+           VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
++#ifdef VK_USE_PLATFORM_ANDROID_KHR
++         uint64_t preferred_usage = 0;
++         if (physical_device->kbase_node_path[0] &&
++             vk_find_struct(base_props->pNext, ANDROID_HARDWARE_BUFFER_USAGE_ANDROID) &&
++             (base_info->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
++             !(base_info->flags & VK_IMAGE_CREATE_PROTECTED_BIT) &&
++             (base_info->format == VK_FORMAT_R8G8B8A8_UNORM ||
++              base_info->format == VK_FORMAT_B8G8R8A8_UNORM)) {
++            preferred_usage = (1ull << 29) | GRALLOC_USAGE_HW_COMPOSER;
++         }
++         result = vk_android_get_ahb_image_properties_with_usage(
++            physicalDevice, base_info, base_props, preferred_usage);
++#else
+          result = vk_android_get_ahb_image_properties(physicalDevice, base_info,
+                                                       base_props);
++#endif
+       } else {
+          result = panvk_get_external_image_format_properties(
+             physical_device, base_info, external_info->handleType,
+--- a/src/util/u_gralloc/u_gralloc_fallback.c
++++ b/src/util/u_gralloc/u_gralloc_fallback.c
+@@ -5,6 +5,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include <fcntl.h>
+ #include <limits.h>
+ #include <stdlib.h>
+ #include <pthread.h>
+@@ -415,6 +416,46 @@
+       rc = -EINVAL;
+    free(b.data);
+    return rc;
++}
++
++static int
++panvk_v19_find_plane_fd(const native_handle_t *raw, uint64_t allocation,
++                        uint64_t plane_end)
++{
++   int exact = -1, sufficient = -1;
++   unsigned exact_count = 0, sufficient_count = 0;
++   const uint64_t minimum = MAX2(allocation, plane_end);
++   for (int i = 0; i < raw->numFds; i++) {
++      const int fd = raw->data[i];
++      const bool valid = fd >= 0 && fcntl(fd, F_GETFD) >= 0;
++      const off_t size = valid ? lseek(fd, 0, SEEK_END) : -1;
++      int error = size < 0 ? errno : 0;
++      if (!valid && fd < 0)
++         error = EBADF;
++      if (size >= 0)
++         lseek(fd, 0, SEEK_SET);
++      mesa_logi("[PANVK-DMABUF] %s index=%d valid=%d size=%lld allocation=%llu planeEnd=%llu errno=%d",
++                __func__, i, valid, (long long)size, (unsigned long long)allocation,
++                (unsigned long long)plane_end, error);
++      if (size <= 0 || (uint64_t)size < minimum)
++         continue;
++
++      sufficient = i;
++      sufficient_count++;
++      if ((uint64_t)size == allocation) {
++         exact = i;
++         exact_count++;
++      }
++   }
++
++   if (exact_count == 1)
++      return exact;
++   if (sufficient_count == 1)
++      return sufficient;
++
++   mesa_logw("[PANVK-DMABUF] %s unable to identify one backing FD (exact=%u sufficient=%u)",
++             __func__, exact_count, sufficient_count);
++   return -1;
+ }
+ 
+ static int
+@@ -464,7 +505,10 @@
+       offsets[i] = (int)offset;
+       strides[i] = (int)stride;
+       if (offsets[i] == 0 && i > 0) fd_index++;
+-      if (!raw || fd_index >= raw->numFds) { rc = -EINVAL; break; }
++      if (!raw || raw->numFds <= 0 || raw->numFds > 16) { rc = -EINVAL; break; }
++      if (planes == 1 && raw->numFds > 1)
++         fd_index = panvk_v19_find_plane_fd(raw, allocation, (uint64_t)offset + total);
++      if (fd_index < 0 || fd_index >= raw->numFds) { rc = -EINVAL; break; }
+       fds[i] = raw->data[fd_index];
+       mesa_logi("[P0A-V19-FULLPLANE] plane=%u fd_index=%d offset=%d stride=%d total=%lld sample_bits=%lld samples=%lldx%lld sub=%lldx%lld",
+                 (unsigned)i, fd_index, offsets[i], strides[i], (long long)total,
+@@ -513,6 +557,8 @@
+    if (rl || rf || rm || ra || rp || fr) return -EINVAL;
+    out->drm_fourcc = fourcc;
+    out->modifier = modifier;
++   out->layer_count = layer_count;
++   out->alloc_size = allocation;
+    mesa_logi("[P0A-V19-FULLPLANE] accepted fourcc=0x%08x modifier=0x%016llx planes=%d",
+              out->drm_fourcc, (unsigned long long)out->modifier, out->num_planes);
+    return 0;
+--- a/src/panfrost/vulkan/panvk_android.c
++++ b/src/panfrost/vulkan/panvk_android.c
+@@ -219,6 +219,9 @@
+       return VK_SUCCESS;
+    }
+ 
++   mesa_logi("[PANVK-WSI05] route=HAL-immediate %s %ux%u format=%d usage=0x%x flags=0x%x",
++             __func__, pCreateInfo->extent.width, pCreateInfo->extent.height,
++             pCreateInfo->format, pCreateInfo->usage, pCreateInfo->flags);
+    VkImageCreateInfo create_info = *pCreateInfo;
+    create_info.tiling = img->vk.tiling =
+       VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+@@ -263,6 +266,8 @@
+ 
+    const VkNativeBufferANDROID *anb =
+       vk_find_struct_const(bind_info->pNext, NATIVE_BUFFER_ANDROID);
++   mesa_logi("[PANVK-WSI05] route=HAL-deferred %s native=%d createInfo=%d",
++             __func__, anb != NULL, create_info != NULL);
+ 
+    /* Inject ANB into the deferred pNext chain to leverage the existing common
+     * Android helper vk_android_get_anb_layout, which could be refactored to
+@@ -285,6 +290,7 @@
+ 
+    result =
+       vk_android_import_anb_memory_fd(&dev->vk, &img->vk, plane_fd, &dev->vk.alloc);
++   mesa_logi("[PANVK-IMPORT] %s AllocateMemory for deferred bind vkresult=%d", __func__, result);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -378,6 +378,11 @@
+ {
+    VK_FROM_HANDLE(vk_device, dev, device);
+    VkIcdSurfaceAndroid *android_surface = (VkIcdSurfaceAndroid *)surface;
++   mesa_logi("[PANVK-WSI05] route=ICD-staged %s %ux%u format=%d colorspace=%d usage=0x%x transform=0x%x minImages=%u mode=%d flags=0x%x",
++             __func__, pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
++             pCreateInfo->imageFormat, pCreateInfo->imageColorSpace, pCreateInfo->imageUsage,
++             pCreateInfo->preTransform, pCreateInfo->minImageCount,
++             pCreateInfo->presentMode, pCreateInfo->flags);
+    if (!android_surface->window)
+       return VK_ERROR_SURFACE_LOST_KHR;
+ 
+--- a/src/panfrost/lib/kmod/kbase_kmod.c
++++ b/src/panfrost/lib/kmod/kbase_kmod.c
+@@ -2100,7 +2100,10 @@
+    }
+ 
+    if (ret) {
+-      mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
++      int err = errno;
++      mesa_loge("[PANVK-DMABUF] %s KBASE_IOCTL_MEM_IMPORT layout=%u fd=%d flags=0x%llx errno=%d (%s)",
++                __func__, p_atomic_read(&import_layout), fd,
++                (unsigned long long)import_flags, err, strerror(err));
+       goto err_close_dmabuf;
+    }
+ 
+@@ -2119,8 +2122,10 @@
+       mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
+            req.out.gpu_va);
+    if (kbase_bo->gpu_mapping == MAP_FAILED) {
+-      mesa_loge("kbase: mmap of imported dma-buf failed: %s",
+-                strerror(errno));
++      int err = errno;
++      mesa_loge("[PANVK-DMABUF] %s GPU mmap fd=%d size=%llu flags=0x%llx errno=%d (%s)",
++                __func__, fd, (unsigned long long)bo_size,
++                (unsigned long long)req.out.flags, err, strerror(err));
+       kbase_bo->gpu_mapping = NULL;
+       struct kbase_ioctl_mem_free free_req = { .gpu_addr = req.out.gpu_va };
+       ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &free_req);
+@@ -2132,8 +2137,9 @@
+          mmap(NULL, bo_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+               kbase_bo->dmabuf_fd, 0);
+       if (kbase_bo->cpu_ptr == MAP_FAILED) {
+-         mesa_loge("kbase: CPU mmap of imported dma-buf failed: %s",
+-                   strerror(errno));
++         int err = errno;
++         mesa_loge("[PANVK-DMABUF] %s CPU mmap fd=%d size=%llu errno=%d (%s)",
++                   __func__, fd, (unsigned long long)bo_size, err, strerror(err));
+          kbase_bo->cpu_ptr = NULL;
+          goto err_unmap_gpu;
+       }
+--- a/src/panfrost/vulkan/panvk_vX_physical_device.c
++++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
+@@ -29,7 +29,7 @@
+ #include "pan_props.h"
+ 
+ #ifndef PANVK_KBASE_RELEASE
+-#define PANVK_KBASE_RELEASE "RC3-lowmem"
++#define PANVK_KBASE_RELEASE "RC3-lowmem Alpha 05"
+ #endif
+ 
+ /* We reserve one ubo for push constant, one for sysvals and one per-set for the

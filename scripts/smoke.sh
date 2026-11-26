@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/versions.sh
-work=build/alpha03-smoke
+work=build/alpha05-smoke
 tests=build/kbase/tests
 ndk=build/android-ndk-$NDK_RELEASE
 cc="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$ANDROID_API-clang"
@@ -34,13 +34,13 @@ import sys
 from zipfile import ZipFile, ZIP_DEFLATED
 
 work = Path(sys.argv[1])
-with ZipFile("dist/PanVK-G615-Alpha03-smoke.zip", "w", ZIP_DEFLATED) as out:
+with ZipFile("dist/PanVK_G615_Alpha_05_WSI_smoke.zip", "w", ZIP_DEFLATED) as out:
     for name in ("triangle", "depth-stencil", "texture-features", "fdimport",
                  "libpanprobe-swapchain.so"):
         binary = work / name
         assert binary.read_bytes()[:6] == b"\x7fELF\x02\x01"
         assert int.from_bytes(binary.read_bytes()[18:20], "little") == 183
         out.write(binary, name)
-    out.write("docs/alpha03-rendering.md", "TESTING.md")
+    out.write("docs/alpha05-wsi.md", "TESTING.md")
     out.write("build/kbase/LICENSES/MIT.txt", "LICENSE.txt")
 PY
