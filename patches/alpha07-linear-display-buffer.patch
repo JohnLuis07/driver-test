@@ -1,0 +1,35 @@
+--- a/src/panfrost/vulkan/panvk_physical_device.c
++++ b/src/panfrost/vulkan/panvk_physical_device.c
+@@ -2724,7 +2724,9 @@
+              !(base_info->flags & VK_IMAGE_CREATE_PROTECTED_BIT) &&
+              (base_info->format == VK_FORMAT_R8G8B8A8_UNORM ||
+               base_info->format == VK_FORMAT_B8G8R8A8_UNORM)) {
+-            preferred_usage = (1ull << 29) | GRALLOC_USAGE_HW_COMPOSER;
++            /* Ask gralloc for CPU-accessible storage to avoid AFBC scanout. */
++            preferred_usage = (1ull << 29) | GRALLOC_USAGE_HW_COMPOSER |
++                              GRALLOC_USAGE_SW_READ_RARELY | GRALLOC_USAGE_SW_WRITE_RARELY;
+          }
+          result = vk_android_get_ahb_image_properties_with_usage(
+             physicalDevice, base_info, base_props, preferred_usage);
+--- a/src/panfrost/vulkan/panvk_vX_physical_device.c
++++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
+@@ -29,7 +29,7 @@
+ #include "pan_props.h"
+ 
+ #ifndef PANVK_KBASE_RELEASE
+-#define PANVK_KBASE_RELEASE "RC3-lowmem Alpha 06"
++#define PANVK_KBASE_RELEASE "RC3-lowmem Alpha 07"
+ #endif
+ 
+ /* We reserve one ubo for push constant, one for sysvals and one per-set for
+--- a/src/vulkan/runtime/vk_android.c
++++ b/src/vulkan/runtime/vk_android.c
+@@ -112,7 +112,7 @@
+ vk_android_hal_open(const struct hw_module_t *mod, const char *id,
+                     struct hw_device_t **dev)
+ {
+-   mesa_logi("[PANVK-WSI05] driver=Alpha06 route=Android-HAL entry=%s", __func__);
++   mesa_logi("[PANVK-WSI05] driver=Alpha07 route=Android-HAL entry=%s", __func__);
+    assert(mod == &HAL_MODULE_INFO_SYM.common);
+    assert(strcmp(id, HWVULKAN_DEVICE_0) == 0);
+ 

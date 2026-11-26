@@ -40,17 +40,24 @@ apply_local_patch() {
     fi
 }
 apply_local_patch "$root/patches/alpha02-push-descriptor-slots.patch"
-alpha05="$root/patches/alpha05-android16-wsi.patch"
-if ! git -C "$mesa" apply --reverse --check "$alpha05" 2>/dev/null; then
-    alpha04="$root/patches/alpha04-mtk-native-buffer-layout.patch"
-    if ! git -C "$mesa" apply --reverse --check "$alpha04" 2>/dev/null; then
-        for patch in "$root"/patches/alpha03-*.patch; do
-            apply_local_patch "$patch"
-        done
-        apply_local_patch "$alpha04"
+alpha07="$root/patches/alpha07-linear-display-buffer.patch"
+alpha06="$root/patches/alpha06-kbase-present-sync.patch"
+if ! git -C "$mesa" apply --reverse --check "$alpha07" 2>/dev/null &&
+   ! git -C "$mesa" apply --reverse --check "$alpha06" 2>/dev/null; then
+    alpha05="$root/patches/alpha05-android16-wsi.patch"
+    if ! git -C "$mesa" apply --reverse --check "$alpha05" 2>/dev/null; then
+        alpha04="$root/patches/alpha04-mtk-native-buffer-layout.patch"
+        if ! git -C "$mesa" apply --reverse --check "$alpha04" 2>/dev/null; then
+            for patch in "$root"/patches/alpha03-*.patch; do
+                apply_local_patch "$patch"
+            done
+            apply_local_patch "$alpha04"
+        fi
+        apply_local_patch "$alpha05"
     fi
-    apply_local_patch "$alpha05"
+    apply_local_patch "$alpha06"
 fi
+apply_local_patch "$alpha07"
 
 common=(-Dbuildtype=release -Dgallium-drivers= -Dvulkan-drivers=panfrost
         -Dpanfrost-kmds=kbase -Dglx=disabled -Degl=disabled -Dgbm=disabled

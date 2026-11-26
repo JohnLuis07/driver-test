@@ -1,8 +1,8 @@
 # Codespace handoff
 
-The current test candidate is **PanVK G615 Alpha 05**. Its native-buffer investigation, source changes, and test procedure are in [Alpha 05 WSI](alpha05-wsi.md). Alpha 04 failed on the Infinix GT 30 Pro with `VK_ERROR_INVALID_EXTERNAL_HANDLE` during Android swapchain creation. Alpha 05 passed Codespaces build and package checks. Its phone result is pending.
+The current device test candidate is **PanVK G615 Alpha 07 Linear Preview**. Follow the [Alpha 07 test plan](alpha07-linear-display.md) to compare the panel image and buffer layout with Alpha 06. Alpha 05 failed during frame presentation after successfully importing the swapchain buffers. Alpha 04 failed earlier with `VK_ERROR_INVALID_EXTERNAL_HANDLE` during swapchain creation.
 
-## Get the exact packages
+## Get the Alpha 05 baseline packages
 
 Open a new Codespace from `main` in `JohnLuis07/driver-test`. The artifacts for Alpha 01 through Alpha 05 are in `dist/`. Git LFS stores the patched source archives and diagnostic symbols. From the repository root, fetch any large files still represented by pointers and verify both Alpha 05 driver builds:
 
@@ -14,7 +14,7 @@ git lfs pull
 
 The [Alpha 05 prerelease](https://github.com/JohnLuis07/driver-test/releases/tag/panvk-g615-alpha05) includes the install ZIP, diagnostic ZIP and symbols, patched Mesa source, notices, patch, build verification, and smoke tests. Earlier packages are available from [GitHub releases](https://github.com/JohnLuis07/driver-test/releases).
 
-## Rebuild
+## Rebuild the current source
 
 ```bash
 ./scripts/setup.sh --install-system
@@ -27,7 +27,7 @@ The [Alpha 05 prerelease](https://github.com/JohnLuis07/driver-test/releases/tag
 
 The scripts fetch pinned inputs and generate the build tree. Unstripped libraries and compiler logs are generated locally under `build/`. See [BUILD.md](../BUILD.md) for toolchain details.
 
-## Capture the phone result
+## Capture the Alpha 05 baseline result
 
 ADB runs on a computer connected to the phone over USB. Install Alpha 05 in Peanuts Native, select it for the game, and confirm the driver info includes `Alpha 05`. Run the following on the USB-connected computer and launch the game. Stop the capture after the first complete swapchain attempt.
 
