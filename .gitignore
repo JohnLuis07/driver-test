@@ -1,0 +1,5 @@
+/build/*
+/dist/*
+/reference/*.zip
+!/build/.gitkeep
+!/dist/.gitkeep
