@@ -1,0 +1,26 @@
+{
+  "mesaCommit": "5a07217f034b3e50d8c7c7794f97a2df1742613b",
+  "kbasePatchCommit": "5b87b74d3e2580d5816e7f2c629f6f016a462f28",
+  "sha256": "a677ff02001a218a0a310373e1e779e681aa2a2a6bad365c5c8490a448a25629",
+  "buildId": "a186db83e52e787a9578caf1266d8e0c83ebc385",
+  "localPatchSha256": {
+    "alpha02-push-descriptor-slots.patch": "bb111b9b1367e8743628611b1887f200618f2f3ffc57957cfe8991738a7d7466",
+    "alpha03-android-cpu-swapchain.patch": "b6c7fd2a135d68393a333d0f2067dab5ea414408290e8aa6ad90959ee0888e73",
+    "alpha03-native-buffer-plane-fd.patch": "4c55c9e85d34ec97310a9722cc8c8f86ffe217d9b2232f5e02e8ac023cfb3b3a"
+  },
+  "needed": [
+    "libc.so",
+    "libdl.so",
+    "liblog.so",
+    "libm.so",
+    "libnativewindow.so",
+    "libsync.so",
+    "libz.so"
+  ],
+  "exports": [
+    "HMI",
+    "vk_icdGetInstanceProcAddr",
+    "vk_icdGetPhysicalDeviceProcAddr",
+    "vk_icdNegotiateLoaderICDInterfaceVersion"
+  ]
+}

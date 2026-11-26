@@ -4,10 +4,10 @@ The current test candidate is **PanVK G615 Alpha 05**. Its native-buffer investi
 
 ## Get the exact packages
 
-Open a new Codespace from `main` in `JohnLuis07/driver-test`. From the repository root, download the Alpha 05 release assets and verify both driver builds:
+Open a new Codespace from `main` in `JohnLuis07/driver-test`. The artifacts for Alpha 01 through Alpha 05 are in `dist/`. Git LFS stores the patched source archives and diagnostic symbols. From the repository root, fetch any large files still represented by pointers and verify both Alpha 05 driver builds:
 
 ```bash
-gh release download panvk-g615-alpha05 --repo JohnLuis07/driver-test --dir dist
+git lfs pull
 (cd dist && sha256sum -c PanVK_G615_Alpha_05.SHA256SUMS)
 (cd dist && sha256sum -c PanVK_G615_Alpha_05_Diagnostic.SHA256SUMS)
 ```

@@ -1,0 +1,44 @@
+PanVK G615 Alpha 05 build verification
+Commit dd64b18a2c6cc50293a06f223fc09e56f6832c7f
+Device execution pending. Codespaces validation only.
+
+Release build commands completed
+[90/98] Linking static target src/panfrost/vulkan/libpanvk_v12.a
+[91/98] Linking static target src/panfrost/vulkan/libpanvk_v13.a
+[92/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_physical_device.c.o
+[93/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_wsi.c.o
+[94/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_android.c.o
+[95/98] Compiling C object src/panfrost/vulkan/libpanvk_v14.a.p/csf_panvk_vX_cmd_draw.c.o
+[96/98] Linking static target src/panfrost/vulkan/libpanvk_v14.a
+[97/98] Linking target src/panfrost/vulkan/libvulkan_panfrost.so
+STATIC-VALIDATION: PASS (android)
+
+Diagnostic build commands completed
+[90/98] Linking static target src/panfrost/vulkan/libpanvk_v12.a
+[91/98] Linking static target src/panfrost/vulkan/libpanvk_v13.a
+[92/98] Compiling C object src/panfrost/vulkan/libpanvk_v14.a.p/csf_panvk_vX_cmd_draw.c.o
+[93/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_physical_device.c.o
+[94/98] Linking static target src/panfrost/vulkan/libpanvk_v14.a
+[95/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_android.c.o
+[96/98] Compiling C object src/panfrost/vulkan/libvulkan_panfrost.so.p/panvk_wsi.c.o
+[97/98] Linking target src/panfrost/vulkan/libvulkan_panfrost.so
+STATIC-VALIDATION: PASS (android)
+MTK layout and mapper FD fixtures passed
+Peanuts DriverZip import passed for PanVK_G615_Alpha_05
+Peanuts DriverZip import passed for PanVK_G615_Alpha_05_Diagnostic
+Archive:  dist/PanVK_G615_Alpha_05_WSI_smoke.zip
+    testing: triangle                 OK
+    testing: depth-stencil            OK
+    testing: texture-features         OK
+    testing: fdimport                 OK
+    testing: libpanprobe-swapchain.so   OK
+    testing: TESTING.md               OK
+    testing: LICENSE.txt              OK
+No errors detected in compressed data of dist/PanVK_G615_Alpha_05_WSI_smoke.zip.
+PanVK_G615_Alpha_05.adpkg.zip: OK
+PanVK_G615_Alpha_05.build.json: OK
+PanVK_G615_Alpha_05.source.tar.gz: OK
+PanVK_G615_Alpha_05.notices.tar.gz: OK
+PanVK_G615_Alpha_05_Diagnostic.adpkg.zip: OK
+PanVK_G615_Alpha_05_Diagnostic.build.json: OK
+PanVK_G615_Alpha_05_Diagnostic.so.debug.gz: OK

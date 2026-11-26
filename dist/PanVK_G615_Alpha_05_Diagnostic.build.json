@@ -1,0 +1,28 @@
+{
+  "mesaCommit": "5a07217f034b3e50d8c7c7794f97a2df1742613b",
+  "kbasePatchCommit": "5b87b74d3e2580d5816e7f2c629f6f016a462f28",
+  "sha256": "6a3508f80bc9eec530f5deea88669e117732018d4d0d1e51738770191ec3821d",
+  "buildId": "e8e37fa0675a107142010923b6eafe39b5bccfd0",
+  "localPatchSha256": {
+    "alpha02-push-descriptor-slots.patch": "bb111b9b1367e8743628611b1887f200618f2f3ffc57957cfe8991738a7d7466",
+    "alpha03-android-cpu-swapchain.patch": "b6c7fd2a135d68393a333d0f2067dab5ea414408290e8aa6ad90959ee0888e73",
+    "alpha03-native-buffer-plane-fd.patch": "4c55c9e85d34ec97310a9722cc8c8f86ffe217d9b2232f5e02e8ac023cfb3b3a",
+    "alpha04-mtk-native-buffer-layout.patch": "1e74d91f107bc26416301baf1e43faa703a3d4aed4a6d92bc4cada6cca112c3a",
+    "alpha05-android16-wsi.patch": "61c23993d45e23f705906724e9e933d60d0deb9641a83d9a3350c20bc156e3f7"
+  },
+  "needed": [
+    "libc.so",
+    "libdl.so",
+    "liblog.so",
+    "libm.so",
+    "libnativewindow.so",
+    "libsync.so",
+    "libz.so"
+  ],
+  "exports": [
+    "HMI",
+    "vk_icdGetInstanceProcAddr",
+    "vk_icdGetPhysicalDeviceProcAddr",
+    "vk_icdNegotiateLoaderICDInterfaceVersion"
+  ]
+}

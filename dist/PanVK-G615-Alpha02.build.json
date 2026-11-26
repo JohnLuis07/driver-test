@@ -1,0 +1,25 @@
+{
+  "mesaCommit": "5a07217f034b3e50d8c7c7794f97a2df1742613b",
+  "kbasePatchCommit": "5b87b74d3e2580d5816e7f2c629f6f016a462f28",
+  "sha256": "3ba17ff9b8641449d91140a3c026e008586f99dacf255c930c6ffbeee4e74684",
+  "buildId": "5d76df5cca6430ec8027792841c3b1b50184018a",
+  "localPatchSha256": {
+    "alpha02-push-descriptor-slots.patch": "bb111b9b1367e8743628611b1887f200618f2f3ffc57957cfe8991738a7d7466",
+    "alpha02-swapchain-stage-logging.patch": "a7727f1f366341298fc9fa9b2dae545a3516140affc994e87482bfb476e66d1f"
+  },
+  "needed": [
+    "libc.so",
+    "libdl.so",
+    "liblog.so",
+    "libm.so",
+    "libnativewindow.so",
+    "libsync.so",
+    "libz.so"
+  ],
+  "exports": [
+    "HMI",
+    "vk_icdGetInstanceProcAddr",
+    "vk_icdGetPhysicalDeviceProcAddr",
+    "vk_icdNegotiateLoaderICDInterfaceVersion"
+  ]
+}
